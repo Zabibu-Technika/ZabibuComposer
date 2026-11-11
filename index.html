@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Zabibu Composer — draw music, export a ringtone</title>
+<meta name="description" content="Zabibu Composer is a visual music instrument: draw notes, load African arpeggios, and export a mixed, mastered WAV, MP3, MP4, MIDI, or ringtone. Offline-first, accessible, and built in Nairobi by Tehillah Kachila.">
+<meta name="theme-color" content="#faf8f3">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/icon-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="canonical" href="https://zabibucomposer.vercel.app/">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
+<meta name="author" content="Tehillah Kachila">
+<meta name="application-name" content="Zabibu Composer">
+<meta name="keywords" content="Zabibu Composer, visual music instrument, draw music, arpeggios, African music, zouk, soukous, rhumba, afrobeat, afrohouse, ringtone maker, MP3 export, MP4 export, offline music app">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Zabibu Composer">
+<meta property="og:title" content="Zabibu Composer — draw music, export a ringtone">
+<meta property="og:description" content="A visual instrument for quick loops, African arpeggios, and finished mixes. Export WAV, MP3, MP4, MIDI, or a ringtone. Offline-first and accessible.">
+<meta property="og:url" content="https://zabibucomposer.vercel.app/">
+<meta property="og:image" content="https://zabibucomposer.vercel.app/assets/og-composer.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Zabibu Composer — a red spiral and the words Draw music. Export a ringtone.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Zabibu Composer — draw music, export a ringtone">
+<meta name="twitter:description" content="A visual instrument for quick loops, African arpeggios, and finished mixes. Export WAV, MP3, MP4, MIDI, or a ringtone.">
+<meta name="twitter:image" content="https://zabibucomposer.vercel.app/assets/og-composer.png">
+<link rel="stylesheet" href="css/app.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://zabibu.vercel.app/#organization",
+      "name": "Zabibu Technika",
+      "url": "https://zabibu.vercel.app",
+      "foundingLocation": { "@type": "Place", "name": "Nairobi, Kenya" }
+    },
+    {
+      "@type": "WebApplication",
+      "@id": "https://zabibucomposer.vercel.app/#app",
+      "name": "Zabibu Composer",
+      "url": "https://zabibucomposer.vercel.app/",
+      "applicationCategory": "MultimediaApplication",
+      "operatingSystem": "Any",
+      "browserRequirements": "Requires JavaScript, Web Audio, and a modern browser",
+      "description": "A visual music instrument for drawing notes, loading African arpeggios, and exporting mixed and mastered WAV, MP3, MP4, MIDI, or ringtone files.",
+      "isAccessibleForFree": true,
+      "author": {
+        "@type": "Person",
+        "name": "Tehillah Kachila"
+      },
+      "publisher": { "@id": "https://zabibu.vercel.app/#organization" },
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "featureList": [
+        "Visual drawing instrument",
+        "African arpeggio library",
+        "Sample drawings including a spiral",
+        "WAV, MP3, MP4, MIDI, and ringtone export",
+        "Automatic mixing and mastering",
+        "Offline-first PWA",
+        "Keyboard, speech, and high-contrast accessibility"
+      ]
+    }
+  ]
+}
+</script>
+</head>
+<body>
+<a class="skip" href="#studio">Skip to studio</a>
+
+<header class="topbar">
+  <a class="brand" href="./" aria-label="Zabibu Composer home">
+    <img class="brand-mark" src="assets/composer-mark.svg" alt="">
+    <span class="brand-name">ZABIBU</span>
+    <span class="brand-sub">COMPOSER</span>
+  </a>
+  <nav class="mainnav" aria-label="Sections">
+    <a href="#studio">Studio</a>
+    <a href="#arpeggios" data-open="arpeggios">Arpeggios</a>
+    <a href="#samples" data-open="samples">Samples</a>
+    <a href="#gallery" data-open="gallery">Gallery</a>
+    <a href="#about" data-open="about">About</a>
+  </nav>
+  <div class="top-actions">
+    <button class="icon-btn" id="help-btn" aria-label="Help">?</button>
+    <a class="btn btn-ghost" href="https://zabibu.vercel.app" target="_blank" rel="noopener">Zabibu Technika ↗</a>
+  </div>
+</header>
+
+<main id="studio" class="app">
+  <aside class="rail" aria-label="Tools and instruments">
+    <section class="rail-block">
+      <p class="rail-label">Tools</p>
+      <div class="tool-grid">
+        <button class="tool is-active" data-tool="draw" aria-pressed="true">✎ Draw</button>
+        <button class="tool" data-tool="erase" aria-pressed="false">⌫ Erase</button>
+        <button class="tool" id="undo" aria-label="Undo">↶ Undo</button>
+        <button class="tool" id="redo" aria-label="Redo">↷ Redo</button>
+        <button class="tool" id="clear-layer">Clear layer</button>
+        <button class="tool" id="shuffle">Surprise</button>
+      </div>
+    </section>
+
+    <section class="rail-block">
+      <p class="rail-label">Instruments</p>
+      <div class="instruments" id="instrument-list"></div>
+    </section>
+
+    <section class="rail-block">
+      <p class="rail-label">View</p>
+      <div class="view-grid">
+        <button class="toggle is-on" id="grid-toggle" aria-pressed="true">Grid</button>
+        <button class="toggle is-on" id="names-toggle" aria-pressed="true">Note names</button>
+        <button class="toggle" id="shapes-toggle" aria-pressed="false">Shapes</button>
+        <button class="toggle" id="recolor-btn">Recolor</button>
+        <button class="toggle" id="background-btn">Background</button>
+        <button class="toggle" id="access-btn">Accessibility</button>
+      </div>
+    </section>
+  </aside>
+
+  <section class="stage">
+    <div class="stage-head">
+      <div class="piece-meta">
+        <p class="eyebrow">Visual instrument</p>
+        <h1 id="piece-title">Untitled piece</h1>
+        <p class="piece-sub" id="piece-sub">Draw a line. It becomes music.</p>
+      </div>
+      <div class="layer-tabs" role="tablist" aria-label="Layers">
+        <button role="tab" aria-selected="true" data-layer="0">1</button>
+        <button role="tab" aria-selected="false" data-layer="1">2</button>
+        <button role="tab" aria-selected="false" data-layer="2">3</button>
+      </div>
+    </div>
+
+    <div class="canvas-wrap" id="canvas-wrap">
+      <canvas id="score" tabindex="0" role="application" aria-label="Music canvas. Use arrow keys to move the cursor, Enter to add a note, Delete to remove, and Space to play or stop."></canvas>
+      <div class="canvas-hint" id="canvas-hint">Draw with the pen · tap a note to hear it</div>
+      <div class="canvas-cursor" id="canvas-cursor" hidden></div>
+    </div>
+
+    <div class="transport" role="group" aria-label="Transport">
+      <button class="icon-btn" id="rewind" aria-label="To the beginning">⏮</button>
+      <button class="play-btn" id="play" aria-label="Play">▶</button>
+      <div class="bpm">
+        <label for="bpm">BPM</label>
+        <input id="bpm" type="number" min="40" max="220" value="110" inputmode="numeric">
+      </div>
+      <button class="btn btn-ghost" id="tap">Tap</button>
+      <button class="btn btn-ghost" id="metronome" aria-pressed="false">Click</button>
+      <button class="btn btn-ghost is-on" id="loop" aria-pressed="true">Loop</button>
+      <span class="position" id="position">1.1</span>
+      <span class="rec-dot" id="rec-dot" hidden>● REC</span>
+    </div>
+  </section>
+
+  <aside class="panel" aria-label="Sound, time, and export">
+    <section class="panel-block">
+      <h2>Layers</h2>
+      <div class="layer-list" id="layer-list"></div>
+    </section>
+
+    <section class="panel-block">
+      <h2>Sound</h2>
+      <label class="field">Key <select id="key"></select></label>
+      <label class="field">Scale <select id="scale"></select></label>
+      <label class="field">Range <select id="range"></select></label>
+      <div class="inline-fields">
+        <label class="field">Octave
+          <span class="stepper">
+            <button id="oct-down" aria-label="Octave down">−</button>
+            <output id="octave">0</output>
+            <button id="oct-up" aria-label="Octave up">+</button>
+          </span>
+        </label>
+        <label class="field">Tune
+          <span class="tune-wrap"><input id="tune" type="number" min="-50" max="50" value="0" inputmode="numeric"> ¢</span>
+        </label>
+      </div>
+    </section>
+
+    <section class="panel-block">
+      <h2>Time</h2>
+      <label class="field">Quantize <select id="quantize"></select></label>
+      <label class="field">Swing <select id="swing"></select></label>
+      <label class="field">Loop
+        <select id="loop-bars">
+          <option value="4">4 bars</option>
+          <option value="8" selected>8 bars</option>
+          <option value="16">16 bars</option>
+        </select>
+      </label>
+    </section>
+
+    <section class="panel-block quick">
+      <h2>Quick create</h2>
+      <button class="quick-card" data-open="arpeggios"><strong>Arpeggios</strong><span>African grooves, three ways</span></button>
+      <button class="quick-card" data-open="samples"><strong>Sample drawings</strong><span>Spiral, waves, stars, more</span></button>
+      <button class="quick-card" id="surprise"><strong>Surprise me</strong><span>One tap, a new loop</span></button>
+    </section>
+
+    <section class="panel-block export">
+      <details class="export-details">
+        <summary>Export</summary>
+        <div class="export-body">
+          <div class="export-grid">
+            <button data-export="wav">WAV</button>
+            <button data-export="mp3">MP3</button>
+            <button data-export="mp4">MP4</button>
+            <button data-export="ring">Ringtone</button>
+            <button data-export="midi">MIDI</button>
+            <button data-export="project">Project</button>
+          </div>
+          <button class="btn btn-ghost full" id="open-project">Open project…</button>
+          <input type="file" id="project-file" accept=".json,application/json" hidden>
+          <button class="btn btn-ghost full" id="save-gallery">Save to gallery</button>
+          <button class="linkbtn export-m4r" id="export-m4r" type="button">iPhone ringtone (.m4r)</button>
+          <div class="export-progress" id="export-progress" hidden><span></span></div>
+          <p class="fine" id="export-status" role="status">Mix and master are automatic.</p>
+        </div>
+      </details>
+    </section>
+  </aside>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <span><strong>Zabibu Composer</strong> — a visual instrument by Tehillah Kachila.</span>
+    <span class="footer-links">
+      <a href="https://zabibu.vercel.app" target="_blank" rel="noopener">Zabibu Technika ↗</a>
+      <button class="linkbtn" data-open="about">About</button>
+      <button class="linkbtn" data-open="access">Accessibility</button>
+    </span>
+  </div>
+</footer>
+
+<!-- Arpeggios -->
+<dialog class="dialog" id="arpeggio-dialog" aria-labelledby="arp-title">
+  <div class="dialog-head">
+    <div><p class="eyebrow">Quick create</p><h2 id="arp-title">Arpeggios</h2></div>
+    <button class="icon-btn" data-close aria-label="Close">×</button>
+  </div>
+  <p class="dialog-lead">Three variations per genre. Tap one to load a full loop — arpeggio, bass, and pad — into the three layers.</p>
+  <div class="genre-chips" id="genre-chips" role="group" aria-label="Genres"></div>
+  <div class="arp-grid" id="arp-grid"></div>
+  <div class="dialog-actions">
+    <button class="btn btn-primary" id="arp-random">Load a random groove</button>
+  </div>
+</dialog>
+
+<!-- Samples -->
+<dialog class="dialog" id="samples-dialog" aria-labelledby="samples-title">
+  <div class="dialog-head">
+    <div><p class="eyebrow">Quick create</p><h2 id="samples-title">Sample drawings</h2></div>
+    <button class="icon-btn" data-close aria-label="Close">×</button>
+  </div>
+  <p class="dialog-lead">Every shape becomes a melody. The spiral is here, plus a few extras to try.</p>
+  <div class="sample-grid" id="sample-grid"></div>
+  <div class="dialog-actions">
+    <button class="btn btn-primary" id="sample-random">Draw a random shape</button>
+  </div>
+</dialog>
+
+<!-- Gallery -->
+<dialog class="dialog" id="gallery-dialog" aria-labelledby="gallery-title">
+  <div class="dialog-head">
+    <div><p class="eyebrow">Pieces</p><h2 id="gallery-title">Gallery</h2></div>
+    <button class="icon-btn" data-close aria-label="Close">×</button>
+  </div>
+  <p class="dialog-lead">Start from a built-in piece or a saved project.</p>
+  <h3 class="dialog-subhead">Built-in</h3>
+  <div class="gallery-grid" id="builtin-gallery"></div>
+  <h3 class="dialog-subhead">Saved on this device</h3>
+  <div class="gallery-grid" id="saved-gallery"></div>
+</dialog>
+
+<!-- About -->
+<dialog class="dialog about-dialog" id="about-dialog" aria-labelledby="about-title">
+  <div class="dialog-head">
+    <div><p class="eyebrow">About</p><h2 id="about-title">Zabibu Composer</h2></div>
+    <button class="icon-btn" data-close aria-label="Close">×</button>
+  </div>
+  <div class="about-copy">
+    <p class="about-lede">A visual instrument for drawing music — make a loop, load an African groove, and export something finished.</p>
+    <p><strong>Designed and built by Tehillah Kachila</strong> in Nairobi, Kenya. Zabibu Composer is a Zabibu Technika product.</p>
+    <p>The <strong>Zabibu Technika Ring Tune</strong> was made with Zabibu Composer. <button class="linkbtn" id="play-ringtune">Play the ring tune</button>.</p>
+    <p>Original code, sounds, and drawings. Clean-room implementation inspired by the visual-instrument idea; not affiliated with play_music_theory.</p>
+    <p><a href="https://zabibu.vercel.app" target="_blank" rel="noopener">Visit Zabibu Technika ↗</a></p>
+  </div>
+  <div class="dialog-actions">
+    <button class="btn btn-primary" id="about-start">Start drawing</button>
+  </div>
+</dialog>
+
+<!-- Accessibility -->
+<dialog class="dialog" id="access-dialog" aria-labelledby="access-title">
+  <div class="dialog-head">
+    <div><p class="eyebrow">Everyone can make music</p><h2 id="access-title">Accessibility</h2></div>
+    <button class="icon-btn" data-close aria-label="Close">×</button>
+  </div>
+  <div class="access-grid">
+    <label class="switch-row"><span>Speak actions</span><input type="checkbox" id="a-speak"></label>
+    <label class="switch-row"><span>High contrast</span><input type="checkbox" id="a-contrast"></label>
+    <label class="switch-row"><span>Large controls</span><input type="checkbox" id="a-large"></label>
+    <label class="switch-row"><span>Reduce motion</span><input type="checkbox" id="a-motion"></label>
+    <label class="switch-row"><span>Show note names</span><input type="checkbox" id="a-names" checked></label>
+    <label class="switch-row"><span>Shape-coded notes</span><input type="checkbox" id="a-shapes"></label>
+  </div>
+  <h3 class="dialog-subhead">Keyboard composer</h3>
+  <p class="dialog-lead">Tab to the canvas. Arrow keys move the cursor, Enter adds a note, Delete removes it, Space plays or stops, and <kbd>[</kbd> / <kbd>]</kbd> change the note length. Press <kbd>1</kbd>–<kbd>9</kbd> to choose an instrument.</p>
+  <h3 class="dialog-subhead">Voice commands</h3>
+  <p class="dialog-lead">Say “play”, “stop”, “add note”, “erase”, “next instrument”, “surprise me”, or “export MP3”.</p>
+  <div class="dialog-actions">
+    <button class="btn btn-ghost" id="voice-start">Start voice commands</button>
+    <button class="btn btn-ghost" id="voice-stop" hidden>Stop voice commands</button>
+    <span class="voice-status" id="voice-status" role="status"></span>
+  </div>
+</dialog>
+
+<!-- Backgrounds -->
+<dialog class="dialog" id="background-dialog" aria-labelledby="bg-title">
+  <div class="dialog-head">
+    <div><p class="eyebrow">Stage</p><h2 id="bg-title">Background</h2></div>
+    <button class="icon-btn" data-close aria-label="Close">×</button>
+  </div>
+  <div class="bg-grid" id="bg-grid"></div>
+  <div class="dialog-actions">
+    <label class="btn btn-ghost filebtn">Upload a photo<input type="file" id="bg-file" accept="image/*" hidden></label>
+  </div>
+</dialog>
+
+<!-- Recolor -->
+<dialog class="dialog" id="recolor-dialog" aria-labelledby="recolor-title">
+  <div class="dialog-head">
+    <div><p class="eyebrow">Ink</p><h2 id="recolor-title">Recolor instruments</h2></div>
+    <button class="icon-btn" data-close aria-label="Close">×</button>
+  </div>
+  <div class="recolor-grid" id="recolor-grid"></div>
+  <div class="dialog-actions">
+    <button class="btn btn-ghost" id="recolor-reset">Reset to original colors</button>
+  </div>
+</dialog>
+
+<!-- Help -->
+<dialog class="dialog" id="help-dialog" aria-labelledby="help-title">
+  <div class="dialog-head">
+    <div><p class="eyebrow">First time?</p><h2 id="help-title">Draw a line. Hear a melody.</h2></div>
+    <button class="icon-btn" data-close aria-label="Close">×</button>
+  </div>
+  <ol class="help-steps">
+    <li><strong>Pick an instrument.</strong> Each color is a different sound.</li>
+    <li><strong>Draw on the canvas.</strong> Left to right is time; up and down is pitch.</li>
+    <li><strong>Press play.</strong> The loop repeats. Add more layers with 1, 2, and 3.</li>
+    <li><strong>Export.</strong> WAV, MP3, MP4, MIDI, or a 30-second ringtone — mixed and mastered for you.</li>
+  </ol>
+  <div class="dialog-actions">
+    <button class="btn btn-primary" data-open="samples" data-close-first>Try a sample</button>
+    <button class="btn btn-ghost" data-open="arpeggios" data-close-first>Load an arpeggio</button>
+  </div>
+</dialog>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<div id="sr-status" class="sr-only" aria-live="polite"></div>
+<ol id="note-list" class="sr-only" aria-label="Notes in the active layer"></ol>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

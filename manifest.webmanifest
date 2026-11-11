@@ -1,0 +1,24 @@
+{
+  "name": "Zabibu Composer",
+  "short_name": "Composer",
+  "description": "A visual music instrument for drawing notes, loading African arpeggios, and exporting a finished mix or ringtone.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#faf8f3",
+  "theme_color": "#1a1815",
+  "categories": ["music", "entertainment", "productivity"],
+  "icons": [
+    {
+      "src": "assets/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "assets/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

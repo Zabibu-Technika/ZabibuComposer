@@ -1,0 +1,40 @@
+# Zabibu Composer
+
+> A visual music instrument. Draw notes on a canvas, load African arpeggios, and export a mixed and mastered WAV, MP3, MP4, MIDI, or ringtone. Offline-first, accessible, and built in Nairobi by Tehillah Kachila for Zabibu Technika.
+
+## What it is
+
+Zabibu Composer is a browser-based visual instrument. The canvas maps left to right to time and top to bottom to pitch. Nine synthesized instruments are available: Keys, Pluck, Bell, Marimba, Flute, Strings, Chime, Bass, and 8-bit. Up to three layers can be built and mixed, each with mute and solo.
+
+It is an original, clean-room implementation of the visual-instrument idea. It is not affiliated with play_music_theory.
+
+## Quick creation
+
+- **Arpeggio library:** eight genres with three variations each — Zouk, Soukous, Rhumba, Afrobeat, Afrohouse, Pop, Lo-fi, Cinematic. Each groove loads an arpeggio, a bassline, and a pad onto the three layers.
+- **Sample drawings:** 16 shapes including the spiral from the original, plus waves, circle, zigzag, arc, cross, heart, star, flower, infinity, Lissajous, staircase, orbit, and sunrise.
+- **Surprise me:** loads a random groove or shape.
+
+## Export
+
+- WAV, 24-bit, 48 kHz
+- MP3, 320 kbps
+- MP4, H.264 video with AAC audio, 1280×720
+- MIDI
+- 30-second MP3 ringtone
+- iPhone ringtone (.m4r)
+
+Every export runs through an automatic mix and master chain: EQ, compression, limiting, reverb and delay sends, peak normalization, and fades. The user does not need to mix or master anything.
+
+## Offline and accessibility
+
+A service worker caches the application, sounds, and encoders after the first visit, so the full instrument works without a network.
+
+Accessibility features: full keyboard composer (arrow keys move the cursor, Enter adds a note, Delete removes, Space plays or stops, [ and ] change note length, 1–9 pick an instrument), speech announcements, voice commands, high-contrast mode, large controls, reduced motion, shape-coded notes, and a screen-reader note list.
+
+## Credits
+
+Designed and built by Tehillah Kachila in Nairobi, Kenya. Zabibu Composer is a Zabibu Technika product. The Zabibu Technika Ring Tune was made with Zabibu Composer.
+
+- Website: https://zabibucomposer.vercel.app/
+- Zabibu Technika: https://zabibu.vercel.app
+- Vendor licenses: https://zabibucomposer.vercel.app/vendor/LICENSES.md
