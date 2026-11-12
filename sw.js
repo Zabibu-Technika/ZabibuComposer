@@ -1,6 +1,6 @@
 // Offline-first service worker.
 // Bump CACHE whenever the app shell or any precached file changes.
-const CACHE = "zabibu-composer-v6";
+const CACHE = "zabibu-composer-v7";
 const APP_SHELL = "index.html";
 
 const ASSETS = [

@@ -1314,7 +1314,21 @@ function initShortcuts() {
 function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
   if (location.protocol !== "https:" && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") return;
-  navigator.serviceWorker.register("sw.js").catch(() => {});
+  navigator.serviceWorker
+    .register("sw.js")
+    .then(() => {
+      const key = "zabibu-composer-offline-hint-v1";
+      const seen = (() => {
+        try { return Boolean(localStorage.getItem(key)); } catch (err) { return true; }
+      })();
+      if (seen) return;
+      navigator.serviceWorker.ready.then(() => {
+        try { localStorage.setItem(key, "1"); } catch (err) { /* storage may be blocked */ }
+        toast("Saved for offline use. The whole studio now works without a connection.");
+        announce("Saved for offline use. Zabibu Composer now works without a connection.");
+      });
+    })
+    .catch(() => {});
 }
 
 /* ---------- boot ---------- */

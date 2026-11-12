@@ -3,6 +3,7 @@
 A visual music instrument for drawing notes, loading African arpeggios, and exporting a finished mix or ringtone.
 
 **Live:** <https://zabibucomposer.vercel.app>
+**Source:** <https://github.com/Zabibu-Technika/ZabibuComposer>
 
 ## What it does
 
@@ -21,16 +22,22 @@ A visual music instrument for drawing notes, loading African arpeggios, and expo
 There is no build step.
 
 ```bash
-cd "Zabibu Composer"
+cd ZabibuComposer
 python -m http.server 8140
 ```
 
 Open <http://127.0.0.1:8140>.
 
+## Offline
+
+Open the site once with a connection. The service worker caches the studio and says "Saved for offline use", and from then on drawing, playback, and every export work with no network. The browser's Install button keeps it as an app.
+
+When you change an app file, bump `CACHE` in `sw.js` so returning visitors get the new version.
+
 ## Deploy
 
 ```bash
-cd "Zabibu Composer"
+cd ZabibuComposer
 vercel deploy --prod --yes --project zabibucomposer
 ```
 
