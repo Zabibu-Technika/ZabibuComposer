@@ -586,15 +586,22 @@ function togglePlay() {
     .catch((err) => toast(err.message || "Audio could not start.", true));
 }
 
-function frame() {
+let lastFrameAt = 0;
+
+function frame(now) {
   if (transport?.isPlaying()) {
-    const position = transport.position();
-    $("#position").textContent = barsToPosition(position);
-    renderer?.draw(position, {
-      playing: true,
-      cursor: cursorActive ? cursor : null,
-      liveStroke,
-    });
+    if (!lastFrameAt || now - lastFrameAt >= 30) {
+      lastFrameAt = now;
+      const position = transport.position();
+      $("#position").textContent = barsToPosition(position);
+      renderer?.draw(position, {
+        playing: true,
+        cursor: cursorActive ? cursor : null,
+        liveStroke,
+      });
+    }
+  } else {
+    lastFrameAt = 0;
   }
   requestAnimationFrame(frame);
 }
@@ -1122,8 +1129,15 @@ function initProject() {
     if (exportBusy) return;
     exportBusy = true;
     setExportBusy(true);
+    const wasPlaying = Boolean(transport?.isPlaying());
+    if (wasPlaying) transport.stop();
     try {
-      await exportM4R(state);
+      await exportM4R(state, {
+        onProgress: (value) => {
+          setProgress(value);
+          setExportStatus(`Rendering iPhone ringtone… ${Math.round(value * 100)}%`);
+        },
+      });
       setExportStatus("iPhone ringtone downloaded (.m4r).");
       toast("iPhone ringtone downloaded.");
     } catch (err) {
@@ -1132,6 +1146,11 @@ function initProject() {
     } finally {
       exportBusy = false;
       setExportBusy(false);
+      if (wasPlaying) {
+        setTimeout(() => {
+          try { transport.play(); } catch (err) { /* audio may be blocked */ }
+        }, 250);
+      }
     }
   });
 }
@@ -1158,27 +1177,41 @@ async function runExport(kind) {
   if (exportBusy) return;
   exportBusy = true;
   setExportBusy(true);
+  const wasPlaying = Boolean(transport?.isPlaying());
+  if (wasPlaying) transport.stop();
   const label = { wav: "WAV", mp3: "MP3", mp4: "MP4", ring: "ringtone", midi: "MIDI", project: "project" }[kind] || kind;
   setExportStatus(`Preparing ${label}…`);
+  const report = (value, message) => {
+    setProgress(value);
+    if (message) setExportStatus(message);
+  };
   try {
     if (kind === "project") {
       downloadProject(state, JSON.stringify(store.serializeProject()));
     } else {
-      setProgress(0.12);
+      report(0.06);
       await new Promise((resolve) => setTimeout(resolve, 30));
       if (kind === "wav") await exportWav(state);
-      if (kind === "mp3") await exportMp3(state);
+      if (kind === "mp3") {
+        await exportMp3(state, {
+          onProgress: (value) => report(value, `Encoding MP3… ${Math.round(value * 100)}%`),
+        });
+      }
       if (kind === "midi") await exportMidi(state);
-      if (kind === "ring") await exportRingtone(state, { seconds: 30 });
+      if (kind === "ring") {
+        await exportRingtone(state, {
+          seconds: 30,
+          onProgress: (value) => report(value, `Building 30-second ringtone… ${Math.round(value * 100)}%`),
+        });
+      }
       if (kind === "mp4") {
         await exportVideo(state, {
           onProgress: (value) => {
-            setProgress(value);
-            setExportStatus(`Rendering MP4… ${Math.round(value * 100)}%`);
+            report(value, `Rendering MP4… ${Math.round(value * 100)}%`);
           },
         });
       }
-      setProgress(1);
+      report(1);
     }
     setExportStatus(`${label} downloaded.`);
     toast(`${label} downloaded.`);
@@ -1192,6 +1225,11 @@ async function runExport(kind) {
   } finally {
     exportBusy = false;
     setExportBusy(false);
+    if (wasPlaying) {
+      setTimeout(() => {
+        try { transport.play(); } catch (err) { /* audio may be blocked */ }
+      }, 250);
+    }
   }
 }
 

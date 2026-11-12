@@ -70,7 +70,7 @@ function envelope(param, when, {
   return t4;
 }
 
-export function buildGraph(ctx, state, destination = ctx.destination) {
+export function buildGraph(ctx, state, destination = ctx.destination, options = {}) {
   const master = ctx.createGain();
   const eqLow = ctx.createBiquadFilter();
   eqLow.type = "lowshelf";
@@ -114,8 +114,9 @@ export function buildGraph(ctx, state, destination = ctx.destination) {
   bus.gain.value = 1;
   bus.connect(master);
 
-  const reverb = ctx.createConvolver();
-  reverb.buffer = makeImpulse(ctx, 2.7, 2.3);
+  const reverb = options.reverbSeconds === 0 ? ctx.createGain() : ctx.createConvolver();
+  if (options.reverbSeconds === 0) reverb.gain.value = 0;
+  else reverb.buffer = makeImpulse(ctx, options.reverbSeconds ?? 2.7, 2.3);
   const reverbGain = ctx.createGain();
   reverbGain.gain.value = 0.3;
   reverb.connect(reverbGain);
@@ -423,7 +424,7 @@ export async function renderMix(state, options = {}) {
     : beatsToSeconds(loopBeats, bpm) + (options.tail ?? 2.2);
   const length = Math.max(1, Math.ceil(seconds * sampleRate));
   const ctx = new OfflineAudioContext(2, length, sampleRate);
-  const graph = buildGraph(ctx, state);
+  const graph = buildGraph(ctx, state, ctx.destination, { reverbSeconds: options.reverbSeconds });
   graph.delay.delayTime.value = secPerBeat * 0.75;
 
   const layers = state.layers || [];
@@ -458,15 +459,61 @@ export async function renderMix(state, options = {}) {
   });
 }
 
+// A ringtone is the loop played back-to-back. Rendering 30 s of dense notes at
+// once is the slowest possible path, so render one loop (plus its reverb tail)
+// and lay it down repeatedly instead. The tail of each pass overlaps the start
+// of the next one, which is exactly what the notes would have done anyway.
 export async function renderRingtone(state, seconds = 30) {
-  const buffer = await renderMix(state, {
-    seconds,
-    repeat: true,
-    fadeIn: 0.6,
-    fadeOut: 1.6,
-    tail: 0,
+  const bpm = Math.max(40, state.bpm || 110);
+  const loopSeconds = beatsToSeconds((state.loopBars || 4) * 4, bpm);
+
+  if (loopSeconds >= seconds - 0.5) {
+    return renderMix(state, {
+      seconds,
+      repeat: true,
+      fadeIn: 0.6,
+      fadeOut: 1.6,
+      tail: 0,
+    });
+  }
+
+  const tail = 2.2;
+  const loop = await renderMix(state, {
+    bars: state.loopBars || 4,
+    tail,
+    fadeIn: 0,
+    fadeOut: 0.02,
   });
-  return buffer;
+  return tileLoop(loop, loopSeconds, seconds, { fadeIn: 0.6, fadeOut: 1.6 });
+}
+
+function tileLoop(loop, loopSeconds, seconds, options = {}) {
+  const sampleRate = loop.sampleRate;
+  const loopLength = Math.max(1, Math.min(loop.length, Math.round(loopSeconds * sampleRate)));
+  const overlap = Math.max(0, Math.min(loop.length - loopLength, Math.round(1.5 * sampleRate)));
+  const total = Math.round(seconds * sampleRate);
+  const out = new AudioBuffer({ length: total, numberOfChannels: loop.numberOfChannels, sampleRate });
+
+  for (let channel = 0; channel < loop.numberOfChannels; channel += 1) {
+    const source = loop.getChannelData(channel);
+    const target = out.getChannelData(channel);
+    for (let offset = 0; offset < total; offset += loopLength) {
+      const copy = Math.min(loopLength, total - offset);
+      target.set(source.subarray(0, copy), offset);
+      // Carry the reverb/release tail into the next repetition.
+      const tailStart = loopLength;
+      const tailCopy = Math.min(loop.length - tailStart, total - offset - loopLength);
+      if (tailCopy > 0) {
+        for (let i = 0; i < tailCopy; i += 1) target[offset + loopLength + i] += source[tailStart + i];
+      }
+    }
+  }
+
+  return normalizeBuffer(out, {
+    target: 0.92,
+    fadeIn: options.fadeIn ?? 0.6,
+    fadeOut: options.fadeOut ?? 1.6,
+  });
 }
 
 export function normalizeBuffer(buffer, options = {}) {

@@ -98,7 +98,7 @@ function floatToInt16(float32) {
   return out;
 }
 
-export async function encodeMp3(buffer, kbps = 320) {
+export async function encodeMp3(buffer, kbps = 320, onProgress) {
   await loadScript("vendor/lame.min.js");
   if (!window.lamejs) throw new Error("The MP3 encoder could not load.");
   const channels = buffer.numberOfChannels;
@@ -113,9 +113,15 @@ export async function encodeMp3(buffer, kbps = 320) {
     const r = right.subarray(i, i + blockSize);
     const chunk = channels > 1 ? encoder.encodeBuffer(l, r) : encoder.encodeBuffer(l);
     if (chunk.length) data.push(new Int8Array(chunk));
+    // Yield often so the page keeps painting and the progress bar moves.
+    if ((i / blockSize) % 12 === 0) {
+      onProgress?.(i / left.length);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
   }
   const end = encoder.flush();
   if (end.length) data.push(new Int8Array(end));
+  onProgress?.(1);
 
   return new Blob(data, { type: "audio/mpeg" });
 }
@@ -172,9 +178,9 @@ async function encodeAudioChunks(buffer, muxer, onProgress) {
     encoder.encode(audioData);
     audioData.close();
     count += 1;
-    if (count % 120 === 0) {
+    if (count % 12 === 0) {
       await new Promise((resolve) => setTimeout(resolve, 0));
-      onProgress?.(0.65 + (count / chunks.length) * 0.3);
+      onProgress?.(count / chunks.length);
     }
   }
   await encoder.flush();
@@ -182,7 +188,7 @@ async function encodeAudioChunks(buffer, muxer, onProgress) {
   if (error) throw error;
 }
 
-export async function encodeM4R(buffer) {
+export async function encodeM4R(buffer, onProgress) {
   const { Muxer, ArrayBufferTarget } = await import("../vendor/mp4-muxer.mjs");
   const muxer = new Muxer({
     target: new ArrayBufferTarget(),
@@ -193,7 +199,7 @@ export async function encodeM4R(buffer) {
     },
     fastStart: "in-memory",
   });
-  await encodeAudioChunks(buffer, muxer);
+  await encodeAudioChunks(buffer, muxer, onProgress);
   muxer.finalize();
   return new Blob([muxer.target.buffer], { type: "audio/mp4" });
 }
@@ -206,31 +212,41 @@ export async function exportWav(state, options = {}) {
 }
 
 export async function exportMp3(state, options = {}) {
+  options.onProgress?.(0.05);
   const buffer = await renderMix(state, { bars: state.loopBars, tail: 2.2 });
-  const blob = await encodeMp3(buffer, options.kbps || 320);
+  options.onProgress?.(0.18);
+  const blob = await encodeMp3(buffer, options.kbps || 320, (value) => {
+    options.onProgress?.(0.18 + value * 0.8);
+  });
   downloadBlob(blob, `${slugify(state.title)}-${timestamp()}.mp3`);
   return blob;
 }
 
 export async function exportRingtone(state, options = {}) {
+  options.onProgress?.(0.04);
   const buffer = await renderRingtone(state, options.seconds || 30);
+  options.onProgress?.(0.16);
   if (options.m4r) {
     try {
-      const blob = await encodeM4R(buffer);
+      const blob = await encodeM4R(buffer, options.onProgress);
       downloadBlob(blob, `${slugify(state.title)}-ringtone-${timestamp()}.m4r`);
       return blob;
     } catch (err) {
       /* fall through to MP3 */
     }
   }
-  const blob = await encodeMp3(buffer, 192);
+  const blob = await encodeMp3(buffer, 192, (value) => {
+    options.onProgress?.(0.16 + value * 0.82);
+  });
   downloadBlob(blob, `${slugify(state.title)}-ringtone-${timestamp()}.mp3`);
   return blob;
 }
 
-export async function exportM4R(state) {
+export async function exportM4R(state, options = {}) {
+  options.onProgress?.(0.04);
   const buffer = await renderRingtone(state, 30);
-  const blob = await encodeM4R(buffer);
+  options.onProgress?.(0.16);
+  const blob = await encodeM4R(buffer, (value) => options.onProgress?.(0.16 + value * 0.82));
   downloadBlob(blob, `${slugify(state.title)}-ringtone-${timestamp()}.m4r`);
   return blob;
 }
@@ -424,8 +440,8 @@ export async function exportVideo(state, options = {}) {
   await videoEncoder.flush();
   videoEncoder.close();
 
-  onProgress(0.65);
-  await encodeAudioChunks(audio, muxer, onProgress);
+  onProgress(0.62);
+  await encodeAudioChunks(audio, muxer, (value) => onProgress(0.62 + value * 0.33));
   muxer.finalize();
   onProgress(1);
   const blob = new Blob([muxer.target.buffer], { type: "video/mp4" });

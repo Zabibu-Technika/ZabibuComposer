@@ -22,7 +22,10 @@ function isDarkBackground(state) {
   return state.background === "dusk" || state.background === "sunset" || Boolean(state.backgroundImage);
 }
 
-function drawBackground(ctx, state, width, height, photo) {
+const backdropCache = new Map();
+const photoCache = new WeakMap();
+
+function paintBackground(ctx, state, width, height, photo) {
   const dark = isDarkBackground(state);
   if (state.backgroundImage && photo && photo.complete) {
     const ratio = Math.max(width / photo.width, height / photo.height);
@@ -31,7 +34,7 @@ function drawBackground(ctx, state, width, height, photo) {
     ctx.drawImage(photo, (width - w) / 2, (height - h) / 2, w, h);
     ctx.fillStyle = "rgba(5, 5, 7, 0.22)";
     ctx.fillRect(0, 0, width, height);
-    return;
+    return dark;
   }
 
   if (state.background === "sky") {
@@ -46,7 +49,7 @@ function drawBackground(ctx, state, width, height, photo) {
     sun.addColorStop(1, "rgba(255,255,255,0)");
     ctx.fillStyle = sun;
     ctx.fillRect(0, 0, width, height);
-    return;
+    return dark;
   }
 
   if (state.background === "sunset") {
@@ -61,7 +64,7 @@ function drawBackground(ctx, state, width, height, photo) {
     sun.addColorStop(1, "rgba(255,240,190,0)");
     ctx.fillStyle = sun;
     ctx.fillRect(0, 0, width, height);
-    return;
+    return dark;
   }
 
   if (state.background === "dusk") {
@@ -77,7 +80,7 @@ function drawBackground(ctx, state, width, height, photo) {
       const y = (i * 89.7) % height;
       ctx.fillRect(x, y, 1.2, 1.2);
     }
-    return;
+    return dark;
   }
 
   ctx.fillStyle = state.a11y?.contrast ? "#000000" : "#f3efe6";
@@ -90,6 +93,50 @@ function drawBackground(ctx, state, width, height, photo) {
       }
     }
   }
+  return dark;
+}
+
+function drawBackground(ctx, state, width, height, photo, dpr = 1) {
+  const dark = isDarkBackground(state);
+  const scale = Math.min(2, Math.max(1, dpr));
+
+  if (state.backgroundImage && photo) {
+    if (photo.complete && photo.naturalWidth) {
+      const cached = photoCache.get(photo);
+      if (cached && cached.width === Math.round(width * scale) && cached.height === Math.round(height * scale)) {
+        ctx.drawImage(cached.canvas, 0, 0, width, height);
+        return dark;
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(width * scale);
+      canvas.height = Math.round(height * scale);
+      const offscreen = canvas.getContext("2d");
+      if (offscreen) {
+        offscreen.setTransform(scale, 0, 0, scale, 0, 0);
+        paintBackground(offscreen, state, width, height, photo);
+        photoCache.set(photo, { canvas, width: canvas.width, height: canvas.height });
+        ctx.drawImage(canvas, 0, 0, width, height);
+        return dark;
+      }
+    }
+    paintBackground(ctx, state, width, height, photo);
+    return dark;
+  }
+
+  const key = `${state.background}|${state.a11y?.contrast ? "c" : "n"}|${Math.round(width)}x${Math.round(height)}x${scale}`;
+  let canvas = backdropCache.get(key);
+  if (!canvas) {
+    canvas = document.createElement("canvas");
+    canvas.width = Math.round(width * scale);
+    canvas.height = Math.round(height * scale);
+    const offscreen = canvas.getContext("2d");
+    if (!offscreen) return paintBackground(ctx, state, width, height, photo);
+    offscreen.setTransform(scale, 0, 0, scale, 0, 0);
+    paintBackground(offscreen, state, width, height, photo);
+    if (backdropCache.size > 6) backdropCache.clear();
+    backdropCache.set(key, canvas);
+  }
+  ctx.drawImage(canvas, 0, 0, width, height);
   return dark;
 }
 
@@ -178,7 +225,7 @@ export function drawScore(ctx, state, time, width, height, options = {}) {
 
   ctx.clearRect(0, 0, width, height);
   ctx.save();
-  drawBackground(ctx, state, width, height, options.photo);
+  drawBackground(ctx, state, width, height, options.photo, options.dpr || 1);
 
   const lineColor = contrast ? "#ffe600" : dark ? "rgba(255,255,255,.22)" : "rgba(26,24,21,.16)";
   const strongColor = contrast ? "#ffe600" : dark ? "rgba(255,255,255,.5)" : "rgba(26,24,21,.32)";
@@ -390,6 +437,7 @@ export class ScoreRenderer {
 
   flash(note) {
     if (!note) return;
+    if (this.flashes.size > 400) this.flashes.clear();
     this.flashes.set(note.id, performance.now() + 240);
   }
 
@@ -471,6 +519,7 @@ export class ScoreRenderer {
       playing: options.playing,
       cursor: options.cursor,
       liveStroke: options.liveStroke,
+      dpr: this.dpr,
     });
   }
 }
