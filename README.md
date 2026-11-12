@@ -5,6 +5,8 @@ A visual music instrument for drawing notes, loading African arpeggios, and expo
 **Live:** <https://zabibucomposer.vercel.app>
 **Source:** <https://github.com/Zabibu-Technika/ZabibuComposer>
 
+![Zabibu Composer studio](assets/og-composer.png)
+
 ## What it does
 
 - **Draw music.** The canvas maps left-to-right to time and top-to-bottom to pitch. Pick one of nine instruments, draw a line, and press play.
