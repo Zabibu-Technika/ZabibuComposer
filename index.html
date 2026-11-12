@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Zabibu Composer — draw music, export a ringtone</title>
-<meta name="description" content="Zabibu Composer is a visual music instrument: draw notes, load African arpeggios, and export a mixed, mastered WAV, MP3, MP4, MIDI, or ringtone. Offline-first, accessible, and built in Nairobi by Tehillah Kachila.">
+<meta name="description" content="Zabibu Composer is a visual music instrument: draw a line and hear it, load African arpeggios, and export a mixed, mastered WAV, MP3, MP4, MIDI, or ringtone. Offline-first, accessible, and built in Nairobi by Tehillah Kachila.">
 <meta name="theme-color" content="#faf8f3">
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
@@ -49,7 +49,7 @@
       "applicationCategory": "MultimediaApplication",
       "operatingSystem": "Any",
       "browserRequirements": "Requires JavaScript, Web Audio, and a modern browser",
-      "description": "A visual music instrument for drawing notes, loading African arpeggios, and exporting mixed and mastered WAV, MP3, MP4, MIDI, or ringtone files.",
+      "description": "A visual music instrument for drawing lines that become sound, loading African arpeggios, and exporting mixed and mastered WAV, MP3, MP4, MIDI, or ringtone files.",
       "isAccessibleForFree": true,
       "author": {
         "@type": "Person",
@@ -88,6 +88,7 @@
     <a href="#about" data-open="about">About</a>
   </nav>
   <div class="top-actions">
+    <button class="btn btn-ghost" id="mode-btn" aria-pressed="true" aria-label="Switch to studio layout">Studio</button>
     <button class="icon-btn" id="help-btn" aria-label="Help">?</button>
     <a class="btn btn-ghost" href="https://zabibu.vercel.app" target="_blank" rel="noopener">Zabibu Technika ↗</a>
   </div>
@@ -140,9 +141,19 @@
     </div>
 
     <div class="canvas-wrap" id="canvas-wrap">
-      <canvas id="score" tabindex="0" role="application" aria-label="Music canvas. Use arrow keys to move the cursor, Enter to add a note, Delete to remove, and Space to play or stop."></canvas>
-      <div class="canvas-hint" id="canvas-hint">Draw with the pen · tap a note to hear it</div>
+      <canvas id="score" tabindex="0" role="application" aria-label="Music canvas. Draw a line to hear it. Use arrow keys to move the cursor, Enter to add a note, Delete to remove, and Space to play or stop."></canvas>
+      <div class="canvas-hint" id="canvas-hint">Draw a line. It becomes music.</div>
       <div class="canvas-cursor" id="canvas-cursor" hidden></div>
+    </div>
+
+    <div class="paper-tools" id="paper-tools" role="group" aria-label="Paper tools">
+      <div class="paper-palette" id="paper-palette" role="group" aria-label="Instruments"></div>
+      <div class="paper-actions">
+        <button class="ptool is-active" data-ptool="draw" aria-pressed="true" aria-label="Draw" title="Draw">✎</button>
+        <button class="ptool" data-ptool="erase" aria-pressed="false" aria-label="Erase" title="Erase">⌫</button>
+        <button class="ptool" id="paper-undo" aria-label="Undo" title="Undo">↶</button>
+        <button class="ptool" id="paper-surprise" aria-label="Surprise me" title="Surprise me">✦</button>
+      </div>
     </div>
 
     <div class="transport" role="group" aria-label="Transport">
@@ -355,7 +366,7 @@
   </div>
   <ol class="help-steps">
     <li><strong>Pick an instrument.</strong> Each color is a different sound.</li>
-    <li><strong>Draw on the canvas.</strong> Left to right is time; up and down is pitch.</li>
+    <li><strong>Draw on the canvas.</strong> Left to right is time; up and down is pitch. The line itself is the music: a curve glides, a vertical stroke strums.</li>
     <li><strong>Press play.</strong> The loop repeats. Add more layers with 1, 2, and 3.</li>
     <li><strong>Export.</strong> WAV, MP3, MP4, MIDI, or a 30-second ringtone — mixed and mastered for you.</li>
   </ol>
@@ -367,7 +378,7 @@
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <div id="sr-status" class="sr-only" aria-live="polite"></div>
-<ol id="note-list" class="sr-only" aria-label="Notes in the active layer"></ol>
+<ol id="note-list" class="sr-only" aria-label="Lines and notes in the active layer"></ol>
 
 <script type="module" src="js/app.js"></script>
 </body>

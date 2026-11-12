@@ -1,4 +1,5 @@
 import { renderMix, renderRingtone } from "./audio.js";
+import { strokeEvents } from "./lines.js";
 import { renderFrame } from "./render.js";
 import { midiToName } from "./config.js";
 
@@ -277,10 +278,20 @@ export async function exportMidi(state) {
       events.push({ tick: start, type: "on", note: note.midi, velocity });
       events.push({ tick: end, type: "off", note: note.midi, velocity: 0 });
     }
+    for (const stroke of layer.strokes || []) {
+      for (const event of strokeEvents(stroke, state)) {
+        const start = Math.round(event.time * PPQ);
+        const end = Math.max(start + 1, Math.round((event.time + event.duration) * PPQ));
+        const velocity = Math.max(1, Math.min(127, Math.round(event.velocity * 127)));
+        const midi = Math.max(0, Math.min(127, Math.round(event.midi)));
+        events.push({ tick: start, type: "on", note: midi, velocity });
+        events.push({ tick: end, type: "off", note: midi, velocity: 0 });
+      }
+    }
     events.sort((a, b) => a.tick - b.tick || (a.type === "off" ? -1 : 1));
     const bytes = [];
     bytes.push(...textEvent(0x03, layer.name || `Layer ${layerIndex + 1}`));
-    const instrument = layer.notes[0]?.instrument || state.instrument;
+    const instrument = layer.notes[0]?.instrument || layer.strokes?.[0]?.instrument || state.instrument;
     bytes.push(0x00, 0xc0 | layerIndex, programByInstrument[instrument] ?? 0);
     let lastTick = 0;
     for (const event of events) {

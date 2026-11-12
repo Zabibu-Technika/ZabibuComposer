@@ -18,7 +18,8 @@ import {
 import * as store from "./state.js";
 import { ensureContext, previewNote, Transport } from "./audio.js";
 import { ScoreRenderer } from "./render.js";
-import { SAMPLE_SHAPES, sampleNotes, sampleSvg, randomSample } from "./samples.js";
+import { layerLineCount, strokeSummary } from "./lines.js";
+import { SAMPLE_SHAPES, sampleSvg, randomSample } from "./samples.js";
 import {
   ARPEGGIOS,
   GENRES,
@@ -50,6 +51,7 @@ let liveStroke = null;
 let lastDrawTime = -1;
 let lastDrawMidi = -1;
 let lastPreviewMidi = -1;
+let lastPreviewAt = 0;
 let exportBusy = false;
 let currentGenre = "Zouk";
 let tapTimes = [];
@@ -218,6 +220,22 @@ function buildInstruments() {
     if (!button) return;
     chooseInstrument(button.dataset.instrument);
   });
+
+  buildPalette();
+}
+
+function buildPalette() {
+  const palette = $("#paper-palette");
+  if (!palette) return;
+  palette.innerHTML = INSTRUMENTS.map((instrument, index) => {
+    const color = state.colors[instrument.id] || instrument.color;
+    return `<button class="pswatch" data-instrument="${instrument.id}" style="--swatch:${color}" aria-pressed="false" aria-label="${escapeHtml(instrument.name)}" title="${escapeHtml(instrument.name)} (${index + 1})"></button>`;
+  }).join("");
+  palette.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-instrument]");
+    if (!button) return;
+    chooseInstrument(button.dataset.instrument);
+  });
 }
 
 function chooseInstrument(id) {
@@ -229,13 +247,36 @@ function chooseInstrument(id) {
   announce(`${INSTRUMENT_BY_ID[id]?.name || id} selected.`);
 }
 
+function clearActiveLayer() {
+  const layer = state.layers[state.activeLayer];
+  if (!layer.notes.length && !layer.strokes.length) {
+    toast("This layer is already empty.");
+    return;
+  }
+  store.clearActiveLayer();
+  toast("Layer cleared.");
+  announce(`Layer ${state.activeLayer + 1} cleared.`);
+}
+
 function buildTools() {
   $$(".tool[data-tool]").forEach((button) => {
     button.addEventListener("click", () => {
       store.setTool(button.dataset.tool);
     });
   });
+  $$("#paper-tools [data-ptool]").forEach((button) => {
+    button.addEventListener("click", () => {
+      store.setTool(button.dataset.ptool);
+      announce(`${button.dataset.ptool === "erase" ? "Erase" : "Draw"} tool.`);
+    });
+  });
   $("#undo").addEventListener("click", () => {
+    if (store.undo()) {
+      toast("Undone");
+      announce("Undone.");
+    }
+  });
+  $("#paper-undo").addEventListener("click", () => {
     if (store.undo()) {
       toast("Undone");
       announce("Undone.");
@@ -248,14 +289,9 @@ function buildTools() {
     }
   });
   $("#clear-layer").addEventListener("click", () => {
-    if (!store.currentNotes().length) {
-      toast("This layer is already empty.");
-      return;
-    }
-    store.clearActiveLayer();
-    toast("Layer cleared.");
-    announce(`Layer ${state.activeLayer + 1} cleared.`);
+    clearActiveLayer();
   });
+  $("#paper-surprise").addEventListener("click", () => surprise());
   $("#shuffle").addEventListener("click", () => surprise());
 }
 
@@ -309,6 +345,55 @@ function renderLayers() {
   `).join("");
 }
 
+/* ---------- paper mode ---------- */
+
+const PAPER_KEY = "zabibu-composer-paper-v1";
+let paperMode = true;
+
+function initPaperMode() {
+  let stored = null;
+  try { stored = localStorage.getItem(PAPER_KEY); } catch (err) { stored = null; }
+  paperMode = stored === null ? true : stored === "1";
+  applyPaperMode(false);
+  $("#mode-btn").addEventListener("click", () => {
+    paperMode = !paperMode;
+    applyPaperMode(true);
+  });
+  window.addEventListener("resize", () => {
+    if (!renderer) return;
+    renderer.resize();
+    renderer.draw(transport?.isPlaying() ? transport.position() : 0, {
+      playing: transport?.isPlaying(),
+      cursor: cursorActive ? cursor : null,
+    });
+  });
+}
+
+function applyPaperMode(announceChange) {
+  $("#studio").classList.toggle("is-paper", paperMode);
+  document.body.classList.toggle("paper-mode", paperMode);
+  const button = $("#mode-btn");
+  if (button) {
+    button.setAttribute("aria-pressed", String(paperMode));
+    button.textContent = paperMode ? "Studio" : "Paper";
+    button.setAttribute("aria-label", paperMode ? "Open the full studio layout" : "Switch to the paper layout");
+  }
+  try { localStorage.setItem(PAPER_KEY, paperMode ? "1" : "0"); } catch (err) { /* storage may be blocked */ }
+  if (renderer) {
+    requestAnimationFrame(() => {
+      renderer.resize();
+      renderer.draw(transport?.isPlaying() ? transport.position() : 0, {
+        playing: transport?.isPlaying(),
+        cursor: cursorActive ? cursor : null,
+        liveStroke,
+      });
+    });
+  }
+  if (announceChange) {
+    announce(paperMode ? "Paper mode. The big page is ready to draw on." : "Studio mode. Every control is visible.");
+  }
+}
+
 /* ---------- canvas ---------- */
 
 function initCanvas() {
@@ -334,13 +419,13 @@ function initCanvas() {
   };
 
   const drawAt = (event) => {
-    const { x, y, nx, ny } = pointerPosition(event);
-    const rawTime = renderer.xToTime(x);
-    const step = stepBeats(state);
-    const time = Math.round(rawTime / step) * step;
-    const midi = renderer.yToMidi(y);
-    if (time < 0 || time >= state.loopBars * 4) return;
+    const { x, y } = pointerPosition(event);
     if (state.tool === "erase") {
+      const stroke = renderer.hitTestStroke(x, y, 18);
+      if (stroke) {
+        store.removeStroke(stroke.id);
+        return;
+      }
       const hit = renderer.hitTest(x, y, 22);
       if (hit) {
         store.removeNote(hit.id);
@@ -348,34 +433,29 @@ function initCanvas() {
       }
       return;
     }
-    if (liveStroke) {
-      liveStroke.points.push({
-        x: Math.max(0, Math.min(1, nx)),
-        y: Math.max(0, Math.min(1, ny)),
-      });
-      renderer.draw(transport?.isPlaying() ? transport.position() : 0, {
-        playing: transport?.isPlaying(),
-        cursor: cursorActive ? cursor : null,
-        liveStroke,
-      });
+    if (!liveStroke) return;
+    const { x: px, y: py } = renderer.normalizePoint(x, y);
+    const last = liveStroke.points[liveStroke.points.length - 1];
+    if (!last || Math.hypot((px - last.x) * renderer.width, (py - last.y) * renderer.height) > 1.2) {
+      liveStroke.points.push({ x: px, y: py });
     }
-    if (time === lastDrawTime && midi === lastDrawMidi) return;
-    lastDrawTime = time;
-    lastDrawMidi = midi;
-    store.addNote({
-      time,
-      midi,
-      duration: Math.max(0.06, step * 0.92),
-      velocity: 0.78,
-      instrument: state.instrument,
+    // The ink is the score: drawing sounds the pitch under the pen right away.
+    const previewMidi = renderer.pitchAtY(y);
+    const midi = renderer.yToMidi(y);
+    const now = performance.now();
+    if (previewMidi !== lastPreviewMidi && now - lastPreviewAt > 32) {
+      lastPreviewMidi = previewMidi;
+      lastPreviewAt = now;
+      ensureContext()
+        .then(() => previewNote(previewMidi, state.instrument, { velocity: 0.6, duration: 0.16 }))
+        .catch(() => {});
+    }
+    cursor = { time: renderer.xToTime(x), midi, duration: stepBeats(state) };
+    renderer.draw(transport?.isPlaying() ? transport.position() : 0, {
+      playing: transport?.isPlaying(),
+      cursor: cursorActive ? cursor : null,
+      liveStroke,
     });
-    if (midi !== lastPreviewMidi) {
-      lastPreviewMidi = midi;
-      ensureContext().then(() => previewNote(midi, state.instrument, { velocity: 0.65, duration: 0.35 })).catch(() => {});
-    }
-    const note = store.currentNotes().find((n) => Math.abs(n.time - time) < 0.01 && n.midi === midi);
-    if (note) renderer.flash(note);
-    cursor = { time, midi, duration: Math.max(0.06, step * 0.92) };
     $("#canvas-hint").classList.add("is-hidden");
   };
 
@@ -386,6 +466,7 @@ function initCanvas() {
     lastDrawTime = -1;
     lastDrawMidi = -1;
     lastPreviewMidi = -1;
+    lastPreviewAt = 0;
     liveStroke = state.tool === "erase" ? null : { instrument: state.instrument, points: [] };
     canvas.setPointerCapture?.(event.pointerId);
     drawAt(event);
@@ -400,12 +481,10 @@ function initCanvas() {
     drawing = false;
     if (liveStroke && liveStroke.points.length > 1) {
       store.addStroke(liveStroke);
+      const lines = layerLineCount(state.layers[state.activeLayer], state);
+      announce(`Line drawn. ${lines} ${lines === 1 ? "note" : "notes"} on layer ${state.activeLayer + 1}.`);
     }
     liveStroke = null;
-    const layer = state.layers[state.activeLayer];
-    if (layer.notes.length) {
-      announce(`${layer.notes.length} notes on layer ${state.activeLayer + 1}.`);
-    }
     renderer.draw(transport?.isPlaying() ? transport.position() : 0, {
       playing: transport?.isPlaying(),
       cursor: cursorActive ? cursor : null,
@@ -577,8 +656,9 @@ function togglePlay() {
     transport.stop();
     return;
   }
-  if (!store.noteCount() && !state.metronome) {
-    toast("Draw a note or load a groove first.");
+  const hasContent = state.layers.some((layer) => layer.notes.length || (layer.strokes && layer.strokes.length));
+  if (!hasContent && !state.metronome) {
+    toast("Draw a line or load a groove first.");
     return;
   }
   ensureContext()
@@ -632,12 +712,16 @@ function syncUI(reason = "change") {
   $("#octave").textContent = state.octave > 0 ? `+${state.octave}` : String(state.octave);
 
   renderLayers();
-  $$("#instrument-list [data-instrument]").forEach((button) => {
-    button.classList.toggle("is-active", button.dataset.instrument === state.instrument);
-    button.setAttribute("aria-pressed", String(button.dataset.instrument === state.instrument));
+  $$("[data-instrument]").forEach((button) => {
+    const active = button.dataset.instrument === state.instrument;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
   });
-  $$(".tool[data-tool]").forEach((button) => {
-    const active = button.dataset.tool === state.tool;
+  $$("#paper-palette [data-instrument]").forEach((button) => {
+    button.style.setProperty("--swatch", state.colors[button.dataset.instrument] || INSTRUMENT_BY_ID[button.dataset.instrument]?.color || "#888");
+  });
+  $$(".tool[data-tool], #paper-tools [data-ptool]").forEach((button) => {
+    const active = (button.dataset.tool || button.dataset.ptool) === state.tool;
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-pressed", String(active));
   });
@@ -668,9 +752,24 @@ function updateNoteList() {
   if (!list) return;
   const layer = state.layers[state.activeLayer];
   const notes = [...layer.notes].sort((a, b) => a.time - b.time || a.midi - b.midi);
-  list.innerHTML = notes.length
-    ? notes.map((note) => `<li>${escapeHtml(noteLabel(note))}</li>`).join("")
-    : "<li>No notes on this layer yet.</li>";
+  const lines = (layer.strokes || [])
+    .map((stroke, index) => ({ stroke, index, summary: strokeSummary(stroke, state) }))
+    .filter((item) => item.summary)
+    .sort((a, b) => a.summary.start - b.summary.start);
+  const items = [];
+  for (const { stroke, index, summary } of lines.slice(0, 24)) {
+    const instrument = INSTRUMENT_BY_ID[stroke.instrument]?.name || stroke.instrument;
+    const from = barsToPosition(summary.start);
+    const to = barsToPosition(summary.end);
+    items.push(
+      `<li>Line ${index + 1}: ${escapeHtml(instrument)}, ${summary.notes} ${summary.notes === 1 ? "note" : "notes"}, ${midiToName(summary.low)}–${midiToName(summary.high)}, ${from} to ${to}</li>`
+    );
+  }
+  for (const note of notes.slice(0, 24 - Math.min(items.length, 24))) {
+    items.push(`<li>${escapeHtml(noteLabel(note))}</li>`);
+  }
+  if (lines.length > 24) items.push(`<li>Plus ${lines.length - 24} more lines.</li>`);
+  list.innerHTML = items.length ? items.join("") : "<li>No lines on this layer yet. Draw on the paper to make music.</li>";
 }
 
 /* ---------- arpeggios ---------- */
@@ -762,20 +861,17 @@ function renderSampleCards() {
 }
 
 function loadSample(sample, options = {}) {
-  const notes = sampleNotes(sample, state, {
-    instrument: state.instrument,
-    cycle: options.cycle || false,
-  });
   const strokes = sample.paths.map((path) => ({
     instrument: state.instrument,
     points: path.map((point) => ({ x: point.x, y: point.y })),
   }));
-  store.setLayerContent(state.activeLayer, notes, strokes);
+  store.setLayerContent(state.activeLayer, [], strokes);
   store.setSetting("title", sample.name);
+  const lines = layerLineCount(state.layers[state.activeLayer], state);
   closeDialog($("#samples-dialog"));
-  toast(`${sample.name} drawn — ${notes.length} notes`);
-  announce(`${sample.name} loaded with ${notes.length} notes.`);
-  if (!transport.isPlaying() && notes.length) {
+  toast(`${sample.name} drawn — ${lines} ${lines === 1 ? "note" : "notes"}`);
+  announce(`${sample.name} loaded with ${lines} ${lines === 1 ? "note" : "notes"}.`);
+  if (!transport.isPlaying() && lines) {
     setTimeout(() => togglePlay(), 100);
   }
 }
@@ -1349,6 +1445,7 @@ function boot() {
   initShortcuts();
   initCanvas();
   initTransport();
+  initPaperMode();
   applyBackgroundFromState();
   store.on((reason) => {
     syncUI(reason);

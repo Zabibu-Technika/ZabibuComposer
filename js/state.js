@@ -65,7 +65,9 @@ function mergeState(raw) {
       ...base.layers[i],
       ...incoming,
       notes: Array.isArray(incoming.notes) ? incoming.notes : [],
-      strokes: Array.isArray(incoming.strokes) ? incoming.strokes : [],
+      strokes: Array.isArray(incoming.strokes)
+        ? incoming.strokes.map((stroke) => ({ ...stroke, id: stroke.id || uid("s") }))
+        : [],
     };
   });
   next.activeLayer = clamp(Number(next.activeLayer) || 0, 0, 2);
@@ -224,13 +226,27 @@ export function clearActiveLayer() {
 
 export function addStroke(stroke, options = {}) {
   const layer = state.layers[options.layerIndex ?? state.activeLayer] || state.layers[0];
-  if (!stroke || !stroke.points || stroke.points.length < 2) return;
+  if (!stroke || !stroke.points || stroke.points.length < 2) return null;
   if (options.record !== false) snapshot();
-  layer.strokes.push({
+  const entry = {
+    id: stroke.id || uid(),
     instrument: stroke.instrument || state.instrument,
     points: stroke.points.map((point) => ({ x: point.x, y: point.y })),
-  });
+  };
+  layer.strokes.push(entry);
   if (options.emit !== false) emit("stroke-add");
+  return entry;
+}
+
+export function removeStroke(strokeId, options = {}) {
+  const layer = state.layers[options.layerIndex ?? state.activeLayer];
+  if (!layer) return false;
+  const index = layer.strokes.findIndex((stroke) => stroke.id === strokeId);
+  if (index === -1) return false;
+  if (options.record !== false) snapshot();
+  layer.strokes.splice(index, 1);
+  if (options.emit !== false) emit("stroke-remove");
+  return true;
 }
 
 export function setLayerContent(index, notes, strokes = [], options = {}) {
@@ -238,7 +254,7 @@ export function setLayerContent(index, notes, strokes = [], options = {}) {
   if (!layer) return;
   if (options.record !== false) snapshot();
   layer.notes = notes || [];
-  layer.strokes = strokes || [];
+  layer.strokes = (strokes || []).map((stroke) => ({ ...stroke, id: stroke.id || uid("s") }));
   emit("layer-content");
 }
 

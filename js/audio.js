@@ -7,6 +7,7 @@ import {
   stepBeats,
   swingAmount,
 } from "./config.js";
+import { strokeEvents } from "./lines.js";
 
 let audioContext = null;
 let previewGraph = null;
@@ -36,16 +37,55 @@ function makeNoise(ctx, seconds = 0.5) {
   return ctx.__zcNoise;
 }
 
-function makeImpulse(ctx, seconds = 2.8, decay = 2.4) {
+function makeImpulse(ctx, seconds = 3.2, decay = 2.5) {
   const length = Math.floor(ctx.sampleRate * seconds);
   const buffer = ctx.createBuffer(2, length, ctx.sampleRate);
+  const reflections = [0.011, 0.019, 0.031, 0.047, 0.071, 0.103];
   for (let channel = 0; channel < 2; channel += 1) {
     const data = buffer.getChannelData(channel);
+    let smooth = 0;
     for (let i = 0; i < length; i += 1) {
-      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, decay);
+      const t = i / length;
+      // A darker, tape-like tail: one-pole smoothing removes the fizzy top.
+      smooth = smooth * 0.74 + (Math.random() * 2 - 1) * 0.26;
+      data[i] = smooth * Math.pow(1 - t, decay);
     }
+    reflections.forEach((time, index) => {
+      const position = Math.floor(time * ctx.sampleRate * (1 + channel * 0.07));
+      if (position < length) data[position] += (index % 2 === 0 ? 0.42 : -0.3) * (1 - index / reflections.length);
+    });
+    let peak = 0;
+    for (let i = 0; i < length; i += 1) peak = Math.max(peak, Math.abs(data[i]));
+    if (peak > 0) for (let i = 0; i < length; i += 1) data[i] /= peak;
   }
   return buffer;
+}
+
+function softClipCurve(amount = 1.4) {
+  const size = 2048;
+  const curve = new Float32Array(size);
+  for (let i = 0; i < size; i += 1) {
+    const x = (i / (size - 1)) * 2 - 1;
+    curve[i] = Math.tanh(x * amount) / Math.tanh(amount);
+  }
+  return curve;
+}
+
+function noiseBurst(ctx, out, when, { frequency = 2200, q = 1, amp = 0.07, duration = 0.035, type = "bandpass" } = {}) {
+  const source = ctx.createBufferSource();
+  source.buffer = makeNoise(ctx);
+  const filter = ctx.createBiquadFilter();
+  filter.type = type;
+  filter.frequency.value = frequency;
+  filter.Q.value = q;
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(Math.max(0.0001, amp), when);
+  gain.gain.exponentialRampToValueAtTime(0.0001, when + duration);
+  source.connect(filter);
+  filter.connect(gain);
+  gain.connect(out);
+  source.start(when);
+  source.stop(when + duration + 0.02);
 }
 
 function envelope(param, when, {
@@ -70,6 +110,16 @@ function envelope(param, when, {
   return t4;
 }
 
+// Drawn lines slide: a run of ink carries a pitch ramp into the next run, so a
+// diagonal reads as a glissando and a flat line holds still.
+function glide(param, fromFreq, toMidi, when, duration, tune = 0, ratio = 1) {
+  if (toMidi == null) return;
+  const target = midiToFreq(toMidi, tune) * ratio;
+  if (!Number.isFinite(target) || Math.abs(target - fromFreq) < 0.5) return;
+  param.setValueAtTime(Math.max(8, fromFreq), when);
+  param.exponentialRampToValueAtTime(Math.max(8, target), when + Math.max(0.04, Math.min(duration, 4)));
+}
+
 export function buildGraph(ctx, state, destination = ctx.destination, options = {}) {
   const master = ctx.createGain();
   const eqLow = ctx.createBiquadFilter();
@@ -89,11 +139,15 @@ export function buildGraph(ctx, state, destination = ctx.destination, options = 
   eqHigh.gain.value = 1.4;
 
   const comp = ctx.createDynamicsCompressor();
-  comp.threshold.value = -18;
-  comp.knee.value = 22;
-  comp.ratio.value = 3.6;
-  comp.attack.value = 0.006;
-  comp.release.value = 0.24;
+  comp.threshold.value = -20;
+  comp.knee.value = 20;
+  comp.ratio.value = 3.2;
+  comp.attack.value = 0.008;
+  comp.release.value = 0.26;
+
+  const warmth = ctx.createWaveShaper();
+  warmth.curve = softClipCurve(1.35);
+  warmth.oversample = "2x";
 
   const limiter = ctx.createDynamicsCompressor();
   limiter.threshold.value = -1.5;
@@ -102,12 +156,13 @@ export function buildGraph(ctx, state, destination = ctx.destination, options = 
   limiter.attack.value = 0.001;
   limiter.release.value = 0.08;
 
-  master.gain.value = 0.82;
+  master.gain.value = 0.86;
   master.connect(eqLow);
   eqLow.connect(eqMid);
   eqMid.connect(eqHigh);
   eqHigh.connect(comp);
-  comp.connect(limiter);
+  comp.connect(warmth);
+  warmth.connect(limiter);
   limiter.connect(destination);
 
   const bus = ctx.createGain();
@@ -116,72 +171,119 @@ export function buildGraph(ctx, state, destination = ctx.destination, options = 
 
   const reverb = options.reverbSeconds === 0 ? ctx.createGain() : ctx.createConvolver();
   if (options.reverbSeconds === 0) reverb.gain.value = 0;
-  else reverb.buffer = makeImpulse(ctx, options.reverbSeconds ?? 2.7, 2.3);
+  else reverb.buffer = makeImpulse(ctx, options.reverbSeconds ?? 3.2, 2.2);
   const reverbGain = ctx.createGain();
-  reverbGain.gain.value = 0.3;
+  reverbGain.gain.value = 0.27;
   reverb.connect(reverbGain);
   reverbGain.connect(bus);
 
   const delay = ctx.createDelay(2);
   delay.delayTime.value = (60 / Math.max(40, state.bpm || 110)) * 0.75;
   const feedback = ctx.createGain();
-  feedback.gain.value = 0.24;
+  feedback.gain.value = 0.22;
   delay.connect(feedback);
   feedback.connect(delay);
 
   const delayFilter = ctx.createBiquadFilter();
   delayFilter.type = "lowpass";
-  delayFilter.frequency.value = 3200;
+  delayFilter.frequency.value = 2600;
   const delayGain = ctx.createGain();
-  delayGain.gain.value = 0.15;
+  delayGain.gain.value = 0.13;
   delay.connect(delayFilter);
   delayFilter.connect(delayGain);
   delayGain.connect(bus);
 
-  return { master, bus, reverb, reverbGain, delay, feedback, delayFilter, delayGain, comp, limiter };
+  return { master, warmth, bus, reverb, reverbGain, delay, feedback, delayFilter, delayGain, comp, limiter };
 }
 
 function scheduleKeys(ctx, out, note, when, amp) {
   const freq = midiToFreq(note.midi, note.tune);
-  const a = ctx.createOscillator();
-  a.type = "triangle";
-  a.frequency.value = freq;
-  const b = ctx.createOscillator();
-  b.type = "sine";
-  b.frequency.value = freq * 2.005;
-  const bg = ctx.createGain();
-  bg.gain.value = 0.2;
   const filter = ctx.createBiquadFilter();
   filter.type = "lowpass";
-  filter.frequency.setValueAtTime(Math.min(7200, freq * 8), when);
-  filter.frequency.exponentialRampToValueAtTime(Math.max(700, freq * 3), when + 0.45);
-  a.connect(filter);
-  b.connect(bg);
-  bg.connect(filter);
+  filter.Q.value = 0.8;
+  filter.frequency.setValueAtTime(Math.min(7600, freq * 9), when);
+  filter.frequency.exponentialRampToValueAtTime(Math.max(650, freq * 2.4), when + 0.55);
+
+  const body = ctx.createOscillator();
+  body.type = "triangle";
+  body.frequency.value = freq;
+  body.connect(filter);
+
+  const tine = ctx.createOscillator();
+  tine.type = "sine";
+  tine.frequency.value = freq * 2.004;
+  const tineGain = ctx.createGain();
+  tineGain.gain.value = 0.2;
+  tine.connect(tineGain);
+  tineGain.connect(filter);
+
+  const warmth = ctx.createOscillator();
+  warmth.type = "sawtooth";
+  warmth.frequency.value = freq;
+  warmth.detune.value = -6;
+  const warmthGain = ctx.createGain();
+  warmthGain.gain.value = 0.1;
+  warmth.connect(warmthGain);
+  warmthGain.connect(filter);
+
+  const sub = ctx.createOscillator();
+  sub.type = "sine";
+  sub.frequency.value = freq / 2;
+  const subGain = ctx.createGain();
+  subGain.gain.value = 0.14;
+  sub.connect(subGain);
+  subGain.connect(filter);
+
+  glide(body.frequency, freq, note.pitchTo, when, note.duration, note.tune);
+  glide(tine.frequency, freq * 2.004, note.pitchTo, when, note.duration, note.tune, 2.004);
+  glide(warmth.frequency, freq, note.pitchTo, when, note.duration, note.tune);
+  glide(sub.frequency, freq / 2, note.pitchTo, when, note.duration, note.tune, 0.5);
+
   filter.connect(out);
-  envelope(out.gain, when, { attack: 0.006, decay: 0.24, sustain: 0.38, release: 0.45, duration: note.duration, peak: amp });
-  a.start(when);
-  b.start(when);
-  const stop = when + note.duration + 0.6;
-  a.stop(stop);
-  b.stop(stop);
+  envelope(out.gain, when, { attack: 0.004, decay: 0.3, sustain: 0.34, release: 0.55, duration: note.duration, peak: amp });
+  noiseBurst(ctx, out, when, { frequency: 2900, q: 0.9, amp: amp * 0.16, duration: 0.02 });
+  for (const osc of [body, tine, warmth, sub]) {
+    osc.start(when);
+    osc.stop(when + note.duration + 0.7);
+  }
 }
 
 function schedulePluck(ctx, out, note, when, amp) {
   const freq = midiToFreq(note.midi, note.tune);
-  const osc = ctx.createOscillator();
-  osc.type = "sawtooth";
-  osc.frequency.value = freq;
   const filter = ctx.createBiquadFilter();
   filter.type = "lowpass";
-  filter.Q.value = 3;
-  filter.frequency.setValueAtTime(Math.min(9000, freq * 12), when);
-  filter.frequency.exponentialRampToValueAtTime(Math.max(450, freq * 2.2), when + 0.22);
-  osc.connect(filter);
+  filter.Q.value = 3.4;
+  filter.frequency.setValueAtTime(Math.min(9600, freq * 14), when);
+  filter.frequency.exponentialRampToValueAtTime(Math.max(380, freq * 1.9), when + 0.26);
+
+  [-5, 5].forEach((cents, index) => {
+    const osc = ctx.createOscillator();
+    osc.type = "sawtooth";
+    osc.frequency.value = freq;
+    osc.detune.value = cents;
+    glide(osc.frequency, freq, note.pitchTo, when, note.duration, note.tune);
+    const gain = ctx.createGain();
+    gain.gain.value = index === 0 ? 0.82 : 0.5;
+    osc.connect(gain);
+    gain.connect(filter);
+    osc.start(when);
+    osc.stop(when + note.duration + 0.4);
+  });
+
+  const pick = ctx.createOscillator();
+  pick.type = "triangle";
+  pick.frequency.value = freq * 2.006;
+  glide(pick.frequency, freq * 2.006, note.pitchTo, when, note.duration, note.tune, 2.006);
+  const pickGain = ctx.createGain();
+  pickGain.gain.value = 0.12;
+  pick.connect(pickGain);
+  pickGain.connect(filter);
+  pick.start(when);
+  pick.stop(when + 0.3);
+
   filter.connect(out);
-  envelope(out.gain, when, { attack: 0.003, decay: 0.16, sustain: 0.12, release: 0.22, duration: note.duration, peak: amp });
-  osc.start(when);
-  osc.stop(when + note.duration + 0.35);
+  envelope(out.gain, when, { attack: 0.002, decay: 0.18, sustain: 0.1, release: 0.26, duration: note.duration, peak: amp });
+  noiseBurst(ctx, out, when, { frequency: 3400, q: 0.7, amp: amp * 0.22, duration: 0.018 });
 }
 
 function scheduleBell(ctx, out, note, when, amp) {
@@ -205,6 +307,9 @@ function scheduleBell(ctx, out, note, when, amp) {
   carrier.connect(out);
   shimmer.connect(shimmerGain);
   shimmerGain.connect(out);
+  glide(carrier.frequency, freq, note.pitchTo, when, note.duration, note.tune);
+  glide(shimmer.frequency, freq * 2.01, note.pitchTo, when, note.duration, note.tune, 2.01);
+  glide(mod.frequency, freq * 3.51, note.pitchTo, when, note.duration, note.tune, 3.51);
   envelope(out.gain, when, { attack: 0.004, decay: 0.55, sustain: 0.18, release: 1.8, duration: Math.max(note.duration, 0.6), peak: amp });
   carrier.start(when);
   mod.start(when);
@@ -217,23 +322,37 @@ function scheduleBell(ctx, out, note, when, amp) {
 
 function scheduleMarimba(ctx, out, note, when, amp) {
   const freq = midiToFreq(note.midi, note.tune);
-  const a = ctx.createOscillator();
-  a.type = "sine";
-  a.frequency.value = freq;
-  const b = ctx.createOscillator();
-  b.type = "triangle";
-  b.frequency.value = freq * 3.95;
-  const bg = ctx.createGain();
-  bg.gain.value = 0.13;
-  a.connect(out);
-  b.connect(bg);
-  bg.connect(out);
-  envelope(out.gain, when, { attack: 0.003, decay: 0.18, sustain: 0.08, release: 0.32, duration: Math.max(note.duration, 0.2), peak: amp });
-  a.start(when);
-  b.start(when);
-  const stop = when + Math.max(note.duration, 0.2) + 0.45;
-  a.stop(stop);
-  b.stop(stop);
+  const body = ctx.createOscillator();
+  body.type = "sine";
+  body.frequency.value = freq;
+  body.connect(out);
+
+  const edge = ctx.createOscillator();
+  edge.type = "triangle";
+  edge.frequency.value = freq * 3.95;
+  const edgeGain = ctx.createGain();
+  edgeGain.gain.value = 0.14;
+  edge.connect(edgeGain);
+  edgeGain.connect(out);
+
+  const wood = ctx.createOscillator();
+  wood.type = "sine";
+  wood.frequency.value = freq * 9.2;
+  const woodGain = ctx.createGain();
+  woodGain.gain.value = 0.05;
+  wood.connect(woodGain);
+  woodGain.connect(out);
+
+  glide(body.frequency, freq, note.pitchTo, when, note.duration, note.tune);
+  glide(edge.frequency, freq * 3.95, note.pitchTo, when, note.duration, note.tune, 3.95);
+  glide(wood.frequency, freq * 9.2, note.pitchTo, when, note.duration, note.tune, 9.2);
+
+  envelope(out.gain, when, { attack: 0.002, decay: 0.2, sustain: 0.06, release: 0.36, duration: Math.max(note.duration, 0.2), peak: amp });
+  noiseBurst(ctx, out, when, { frequency: 1700, q: 1.2, amp: amp * 0.18, duration: 0.022 });
+  for (const osc of [body, edge, wood]) {
+    osc.start(when);
+    osc.stop(when + Math.max(note.duration, 0.2) + 0.5);
+  }
 }
 
 function scheduleFlute(ctx, out, note, when, amp) {
@@ -241,6 +360,7 @@ function scheduleFlute(ctx, out, note, when, amp) {
   const osc = ctx.createOscillator();
   osc.type = "sine";
   osc.frequency.value = freq;
+  glide(osc.frequency, freq, note.pitchTo, when, note.duration, note.tune);
   const lfo = ctx.createOscillator();
   lfo.type = "sine";
   lfo.frequency.value = 5.1;
@@ -255,7 +375,7 @@ function scheduleFlute(ctx, out, note, when, amp) {
   noiseFilter.frequency.value = Math.min(6000, freq * 2.1);
   noiseFilter.Q.value = 1.1;
   const noiseGain = ctx.createGain();
-  noiseGain.gain.value = 0.035;
+  noiseGain.gain.value = 0.055;
   noise.connect(noiseFilter);
   noiseFilter.connect(noiseGain);
   noiseGain.connect(out);
@@ -284,9 +404,20 @@ function scheduleStrings(ctx, out, note, when, amp) {
     g.gain.value = i === 1 ? 0.24 : 0.14;
     osc.connect(g);
     g.connect(filter);
+    glide(osc.frequency, freq, note.pitchTo, when, note.duration, note.tune);
     osc.start(when);
     osc.stop(when + note.duration + 0.9);
   });
+  const octave = ctx.createOscillator();
+  octave.type = "triangle";
+  octave.frequency.value = freq / 2;
+  glide(octave.frequency, freq / 2, note.pitchTo, when, note.duration, note.tune, 0.5);
+  const octaveGain = ctx.createGain();
+  octaveGain.gain.value = 0.08;
+  octave.connect(octaveGain);
+  octaveGain.connect(filter);
+  octave.start(when);
+  octave.stop(when + note.duration + 0.9);
   filter.connect(out);
   envelope(out.gain, when, { attack: 0.12, decay: 0.18, sustain: 0.62, release: 0.7, duration: note.duration, peak: amp });
 }
@@ -297,6 +428,7 @@ function scheduleChime(ctx, out, note, when, amp) {
     const osc = ctx.createOscillator();
     osc.type = "sine";
     osc.frequency.value = freq * ratio;
+    glide(osc.frequency, freq * ratio, note.pitchTo, when, note.duration, note.tune, ratio);
     const g = ctx.createGain();
     g.gain.value = [0.55, 0.2, 0.12, 0.06][i];
     osc.connect(g);
@@ -309,27 +441,44 @@ function scheduleChime(ctx, out, note, when, amp) {
 
 function scheduleBass(ctx, out, note, when, amp) {
   const freq = midiToFreq(note.midi, note.tune);
+  const filter = ctx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.Q.value = 1.1;
+  filter.frequency.setValueAtTime(1100, when);
+  filter.frequency.exponentialRampToValueAtTime(320, when + 0.18);
+
   const osc = ctx.createOscillator();
   osc.type = "sine";
   osc.frequency.value = freq;
+  osc.connect(filter);
+
   const sub = ctx.createOscillator();
   sub.type = "triangle";
   sub.frequency.value = freq / 2;
   const subGain = ctx.createGain();
-  subGain.gain.value = 0.28;
-  const filter = ctx.createBiquadFilter();
-  filter.type = "lowpass";
-  filter.frequency.value = 620;
-  osc.connect(filter);
+  subGain.gain.value = 0.3;
   sub.connect(subGain);
   subGain.connect(filter);
+
+  const harmonic = ctx.createOscillator();
+  harmonic.type = "sine";
+  harmonic.frequency.value = freq * 2;
+  const harmonicGain = ctx.createGain();
+  harmonicGain.gain.value = 0.1;
+  harmonic.connect(harmonicGain);
+  harmonicGain.connect(filter);
+
+  glide(osc.frequency, freq, note.pitchTo, when, note.duration, note.tune);
+  glide(sub.frequency, freq / 2, note.pitchTo, when, note.duration, note.tune, 0.5);
+  glide(harmonic.frequency, freq * 2, note.pitchTo, when, note.duration, note.tune, 2);
+
   filter.connect(out);
-  envelope(out.gain, when, { attack: 0.006, decay: 0.14, sustain: 0.52, release: 0.3, duration: note.duration, peak: amp * 1.1 });
-  osc.start(when);
-  sub.start(when);
-  const stop = when + note.duration + 0.45;
-  osc.stop(stop);
-  sub.stop(stop);
+  envelope(out.gain, when, { attack: 0.004, decay: 0.16, sustain: 0.5, release: 0.28, duration: note.duration, peak: amp * 1.15 });
+  noiseBurst(ctx, out, when, { frequency: 280, q: 0.8, amp: amp * 0.1, duration: 0.016, type: "lowpass" });
+  for (const voice of [osc, sub, harmonic]) {
+    voice.start(when);
+    voice.stop(when + note.duration + 0.45);
+  }
 }
 
 function scheduleEightBit(ctx, out, note, when, amp) {
@@ -337,6 +486,7 @@ function scheduleEightBit(ctx, out, note, when, amp) {
   const osc = ctx.createOscillator();
   osc.type = "square";
   osc.frequency.value = freq;
+  glide(osc.frequency, freq, note.pitchTo, when, note.duration, note.tune);
   const filter = ctx.createBiquadFilter();
   filter.type = "lowpass";
   filter.frequency.value = Math.min(4800, freq * 7);
@@ -414,6 +564,12 @@ export function swingOffsetBeats(time, state) {
   return 0;
 }
 
+function playableLayers(state) {
+  const layers = state.layers || [];
+  const soloed = layers.some((layer) => layer.solo);
+  return layers.filter((layer) => !layer.muted && (!soloed || layer.solo));
+}
+
 export async function renderMix(state, options = {}) {
   const sampleRate = options.sampleRate || 48000;
   const bpm = Math.max(40, state.bpm || 110);
@@ -427,13 +583,13 @@ export async function renderMix(state, options = {}) {
   const graph = buildGraph(ctx, state, ctx.destination, { reverbSeconds: options.reverbSeconds });
   graph.delay.delayTime.value = secPerBeat * 0.75;
 
-  const layers = state.layers || [];
-  const soloed = layers.some((layer) => layer.solo);
-  const notes = layers.flatMap((layer) => {
-    if (layer.muted) return [];
-    if (soloed && !layer.solo) return [];
-    return layer.notes.map((note) => ({ ...note, layer: layer.id }));
-  });
+  const layers = playableLayers(state);
+  const notes = layers.flatMap((layer) =>
+    layer.notes.map((note) => ({ ...note, layer: layer.id }))
+  );
+  const strokes = layers.flatMap((layer) =>
+    (layer.strokes || []).map((stroke) => ({ stroke, layer: layer.id }))
+  );
 
   const repeats = options.repeat ? Math.ceil(seconds / (loopBeats * secPerBeat)) + 1 : 1;
 
@@ -448,6 +604,15 @@ export async function renderMix(state, options = {}) {
         Math.max(0.08, seconds - when)
       );
       scheduleVoice(ctx, graph, { ...note, duration }, when, state);
+    }
+    for (const { stroke } of strokes) {
+      for (const event of strokeEvents(stroke, state)) {
+        const time = event.time + repeat * loopBeats;
+        const when = (time + swingOffsetBeats(event.time, state)) * secPerBeat;
+        if (when >= seconds - 0.02 || when < 0) continue;
+        const duration = Math.min(event.duration, Math.max(0.08, seconds - when));
+        scheduleVoice(ctx, graph, { ...event, duration, instrument: stroke.instrument }, when, state);
+      }
     }
   }
 
@@ -612,6 +777,18 @@ export class Transport {
           const swing = swingOffsetBeats(note.time, state) * secPerBeat;
           scheduleVoice(this.ctx, this.graph, note, when + swing, state);
           this.callbacks.onNote?.(note, when + swing);
+        }
+      }
+      // Drawn lines play as lines: each run of equal pitch in the ink becomes
+      // one voice, so a curve glides and a vertical stroke strums.
+      for (const stroke of layer.strokes || []) {
+        for (const event of strokeEvents(stroke, state)) {
+          if (event.time >= beat - 0.0001 && event.time < beat + step - 0.0001) {
+            const swing = swingOffsetBeats(event.time, state) * secPerBeat;
+            const at = when + Math.max(0, event.time - beat) * secPerBeat + swing;
+            scheduleVoice(this.ctx, this.graph, { ...event, instrument: stroke.instrument }, at, state);
+            this.callbacks.onNote?.({ ...event, instrument: stroke.instrument }, at);
+          }
         }
       }
     }

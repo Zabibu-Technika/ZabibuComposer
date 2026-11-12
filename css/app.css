@@ -332,7 +332,70 @@ select { width: 100%; }
 .toggle:hover { border-color: var(--ink); }
 .toggle.is-on { background: var(--ink); border-color: var(--ink); color: var(--paper); }
 
-/* ---------- stage ---------- */
+.paper-tools {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 254, 251, 0.9);
+  box-shadow: 0 6px 20px rgba(26, 24, 21, 0.06);
+}
+.paper-palette {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.paper-palette::-webkit-scrollbar { display: none; }
+.pswatch {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  background: var(--swatch);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.16);
+}
+.pswatch:hover { transform: scale(1.08); }
+.pswatch.is-active { border-color: var(--ink); transform: scale(1.12); }
+.paper-actions { display: flex; flex: none; gap: 3px; }
+.ptool {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1;
+}
+.ptool:hover { background: var(--paper-2); border-color: var(--line); }
+.ptool.is-active { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+
+.app.is-paper {
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 64px);
+  max-width: 1120px;
+  overflow: hidden;
+}
+.app.is-paper .stage { flex: 1; min-height: 0; order: 0; width: 100%; }
+.app.is-paper .rail,
+.app.is-paper .panel { display: none; }
+.app.is-paper .paper-tools { display: flex; }
+.app.is-paper .canvas-wrap { flex: 1; min-height: 0; }
+body.paper-mode { overflow-x: hidden; }
+body.paper-mode .site-footer { display: none; }
+
 
 .stage {
   display: flex;
@@ -1058,4 +1121,32 @@ html.a11y-motion *::after {
   .dialog-head, .dialog-lead, .dialog-subhead, .dialog-actions, .genre-chips, .about-copy, .switch-row { padding-left: 12px; padding-right: 12px; }
   .dialog-head { padding-top: 14px; }
   .site-footer .wrap { justify-content: flex-start; }
+
+  /* Paper mode: the drawing surface, never a scrolling page. */
+  body.paper-mode { overflow: hidden; }
+  .app.is-paper {
+    display: flex;
+    flex-direction: column;
+    height: calc(100dvh - 56px);
+    padding: 6px;
+    gap: 6px;
+    overflow: hidden;
+  }
+  .app.is-paper .stage { flex: 1; min-height: 0; gap: 6px; }
+  .app.is-paper .stage-head { flex-direction: row; align-items: center; justify-content: space-between; padding: 0 2px; }
+  .app.is-paper .eyebrow,
+  .app.is-paper .piece-sub { display: none; }
+  .app.is-paper .piece-meta h1 { font-size: 16px; letter-spacing: -0.02em; white-space: nowrap; }
+  .app.is-paper .layer-tabs { padding: 2px; }
+  .app.is-paper .layer-tabs button { width: 26px; height: 24px; font-size: 9px; }
+  .app.is-paper .canvas-wrap { flex: 1; min-height: 0; }
+  .app.is-paper .canvas-hint { top: 8px; font-size: 8.5px; }
+  .app.is-paper .paper-tools { gap: 4px; padding: 4px 5px; border-radius: 16px; }
+  .app.is-paper .paper-palette { gap: 4px; }
+  .app.is-paper .pswatch { width: 21px; height: 21px; }
+  .app.is-paper .ptool { width: 27px; height: 27px; font-size: 12px; }
+  .app.is-paper .transport { padding: 5px 7px; flex-wrap: nowrap; }
+  .app.is-paper .transport .btn { display: none; }
+  .app.is-paper .bpm input { width: 44px; }
+  .app.is-paper #position { font-size: 10px; }
 }

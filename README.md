@@ -1,6 +1,6 @@
 # Zabibu Composer
 
-A visual music instrument for drawing notes, loading African arpeggios, and exporting a finished mix or ringtone.
+A visual music instrument for drawing lines that become sound, loading African arpeggios, and exporting a finished mix or ringtone.
 
 **Live:** <https://zabibucomposer.vercel.app>
 **Source:** <https://github.com/Zabibu-Technika/ZabibuComposer>
@@ -9,7 +9,8 @@ A visual music instrument for drawing notes, loading African arpeggios, and expo
 
 ## What it does
 
-- **Draw music.** The canvas maps left-to-right to time and top-to-bottom to pitch. Pick one of nine instruments, draw a line, and press play.
+- **Draw music.** The canvas maps left-to-right to time and top-to-bottom to pitch. The playhead reads the ink: a curve glides, a diagonal walks, a vertical stroke strums. Pitch is continuous, so the line you draw is the line you hear.
+- **Paper first.** The default screen is one big page and a nine-colour palette; the full studio, exports, and settings are one tap away and the choice is remembered. On a phone the page fits the viewport and never scrolls.
 - **Three layers.** Build an arpeggio, a bassline, and a pad on separate layers; mute or solo each one.
 - **Quick creation.** Load a full groove from the arpeggio library or draw one of 16 sample shapes, including the spiral.
 - **African arpeggios.** Zouk, Soukous, Rhumba, Afrobeat, and Afrohouse, with three variations each, plus Pop, Lo-fi, and Cinematic.

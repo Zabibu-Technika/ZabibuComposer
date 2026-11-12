@@ -1,5 +1,6 @@
 import {
   INSTRUMENTS,
+  clamp,
   instrumentInfo,
   midiToName,
   scaleNotes,
@@ -298,8 +299,7 @@ export function drawScore(ctx, state, time, width, height, options = {}) {
     ctx.globalAlpha = active ? 0.72 : 0.2;
     for (const stroke of layer.strokes || []) {
       if (!stroke.points || stroke.points.length < 2) continue;
-      ctx.strokeStyle = strokeColor(stroke.instrument);
-      ctx.lineWidth = active ? 2.2 : 1.4;
+      const color = strokeColor(stroke.instrument);
       ctx.lineJoin = "round";
       ctx.lineCap = "round";
       ctx.beginPath();
@@ -308,6 +308,13 @@ export function drawScore(ctx, state, time, width, height, options = {}) {
         const py = pad.t + point.y * innerH;
         index === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
       });
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = active ? 0.16 : 0.06;
+      ctx.lineWidth = active ? 7 : 4.5;
+      ctx.stroke();
+      ctx.globalAlpha = active ? 0.92 : 0.24;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = active ? 2.1 : 1.3;
       ctx.stroke();
     }
   }
@@ -470,6 +477,14 @@ export class ScoreRenderer {
     return Math.max(0, Math.min(loopBeats, ((x - pad.l) / innerW) * loopBeats));
   }
 
+  normalizePoint(x, y) {
+    const { pad, innerW, innerH } = this.layout();
+    return {
+      x: clamp((x - pad.l) / innerW, 0, 1),
+      y: clamp((y - pad.t) / innerH, 0, 1),
+    };
+  }
+
   midiToY(midi) {
     const { notes, pad, innerH } = this.layout();
     let index = 0;
@@ -491,6 +506,13 @@ export class ScoreRenderer {
     return notes[index];
   }
 
+  pitchAtY(y) {
+    const { state, pad, innerH } = this.layout();
+    const norm = clamp(1 - (y - pad.t) / innerH, 0, 1);
+    const base = 48 + (state.key || 0) + (state.octave || 0) * 12;
+    return Math.round(base + norm * 12 * Math.max(1, state.range || 2));
+  }
+
   hitTest(x, y, radius = 14) {
     const state = this.getState();
     const active = state.layers[state.activeLayer];
@@ -504,6 +526,36 @@ export class ScoreRenderer {
       if (d <= bestDistance) {
         bestDistance = d;
         best = note;
+      }
+    }
+    return best;
+  }
+
+  hitTestStroke(x, y, radius = 14) {
+    const { state, pad, innerW, innerH } = this.layout();
+    const active = state.layers[state.activeLayer];
+    if (!active || !active.strokes) return null;
+    let best = null;
+    let bestDistance = radius * radius;
+    for (const stroke of active.strokes) {
+      const points = stroke.points;
+      if (!points || points.length < 2) continue;
+      for (let i = 1; i < points.length; i += 1) {
+        const ax = pad.l + points[i - 1].x * innerW;
+        const ay = pad.t + points[i - 1].y * innerH;
+        const bx = pad.l + points[i].x * innerW;
+        const by = pad.t + points[i].y * innerH;
+        const dx = bx - ax;
+        const dy = by - ay;
+        const lengthSq = dx * dx + dy * dy;
+        const t = lengthSq > 0 ? clamp(((x - ax) * dx + (y - ay) * dy) / lengthSq, 0, 1) : 0;
+        const px = ax + dx * t;
+        const py = ay + dy * t;
+        const distance = (x - px) * (x - px) + (y - py) * (y - py);
+        if (distance <= bestDistance) {
+          bestDistance = distance;
+          best = stroke;
+        }
       }
     }
     return best;
