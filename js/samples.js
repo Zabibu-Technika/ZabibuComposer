@@ -1,5 +1,3 @@
-import { scaleNotes, stepBeats } from "./config.js";
-
 function line(x0, y0, x1, y1, steps = 48) {
   const points = [];
   for (let i = 0; i <= steps; i += 1) {
@@ -164,41 +162,6 @@ export function sampleSvg(sample) {
     return `<path d="${d}" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>`;
   });
   return `<svg viewBox="0 0 100 70" role="img" aria-label="${sample.name} sample drawing">${parts.join("")}</svg>`;
-}
-
-export function sampleNotes(sample, state, options = {}) {
-  const notes = [];
-  const loopBeats = Math.max(1, (state.loopBars || 8) * 4);
-  const step = Math.max(1 / 16, stepBeats(state));
-  const scale = scaleNotes(state);
-  const instrument = options.instrument || state.instrument;
-  const cycle = options.cycle || false;
-  const instrumentIds = ["keys", "pluck", "bell", "marimba", "flute", "strings", "chime", "bass", "eightbit"];
-
-  sample.paths.forEach((path, pathIndex) => {
-    const stride = Math.max(1, Math.floor(path.length / 56));
-    let lastTime = -1;
-    for (let i = 0; i < path.length; i += stride) {
-      const point = path[i];
-      const rawTime = Math.max(0, Math.min(1, point.x)) * loopBeats;
-      const time = Math.round(rawTime / step) * step;
-      if (time >= loopBeats - 0.001 || Math.abs(time - lastTime) < 0.001) continue;
-      lastTime = time;
-      const y = Math.max(0, Math.min(1, point.y));
-      const index = Math.round((1 - y) * (scale.length - 1));
-      const midi = scale[index];
-      const inst = cycle ? instrumentIds[(pathIndex + i) % instrumentIds.length] : instrument;
-      notes.push({
-        time,
-        midi,
-        duration: step * 0.92,
-        velocity: 0.6 + (i % 5) * 0.05,
-        instrument: inst,
-      });
-    }
-  });
-
-  return notes;
 }
 
 export function randomSample(exceptId) {

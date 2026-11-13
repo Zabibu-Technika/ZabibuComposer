@@ -48,8 +48,6 @@ let cursor = { time: 0, midi: 60, duration: 0.25 };
 let cursorActive = false;
 let drawing = false;
 let liveStroke = null;
-let lastDrawTime = -1;
-let lastDrawMidi = -1;
 let lastPreviewMidi = -1;
 let lastPreviewAt = 0;
 let exportBusy = false;
@@ -463,8 +461,6 @@ function initCanvas() {
     if (event.button !== undefined && event.button !== 0) return;
     ensureContext().catch(() => {});
     drawing = true;
-    lastDrawTime = -1;
-    lastDrawMidi = -1;
     lastPreviewMidi = -1;
     lastPreviewAt = 0;
     liveStroke = state.tool === "erase" ? null : { instrument: state.instrument, points: [] };

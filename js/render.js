@@ -379,6 +379,38 @@ export function drawScore(ctx, state, time, width, height, options = {}) {
 
   if (time != null && (options.playing || time > 0.001)) {
     const x = xForTime(time);
+    // A bead of light where the playhead crosses the ink, so a loop feels read
+    // rather than merely swept.
+    if (options.playing) {
+      const nx = clamp(time / loopBeats, 0, 1);
+      for (let layerIndex = 0; layerIndex < state.layers.length; layerIndex += 1) {
+        const layer = state.layers[layerIndex];
+        if (layer.muted || (soloed && !layer.solo)) continue;
+        const active = layerIndex === activeIndex;
+        for (const stroke of layer.strokes || []) {
+          const points = stroke.points;
+          if (!points || points.length < 2) continue;
+          const color = strokeColor(stroke.instrument);
+          for (let i = 1; i < points.length; i += 1) {
+            const a = points[i - 1];
+            const b = points[i];
+            if (nx < Math.min(a.x, b.x) || nx > Math.max(a.x, b.x)) continue;
+            const span = b.x - a.x;
+            const t = Math.abs(span) < 0.000001 ? 0 : (nx - a.x) / span;
+            const py = pad.t + (a.y + (b.y - a.y) * t) * innerH;
+            ctx.save();
+            ctx.globalAlpha = active ? 0.95 : 0.42;
+            ctx.shadowColor = color;
+            ctx.shadowBlur = 14;
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(x, py, active ? 4.2 : 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+          }
+        }
+      }
+    }
     ctx.strokeStyle = contrast ? "#ffe600" : "#e8402a";
     ctx.lineWidth = 1.6;
     ctx.beginPath();
