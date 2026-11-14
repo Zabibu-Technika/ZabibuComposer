@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Zabibu Composer — draw music, export a ringtone</title>
 <meta name="description" content="Zabibu Composer is a visual music instrument: draw a line and hear it, load African arpeggios, and export a mixed, mastered WAV, MP3, MP4, MIDI, or ringtone. Offline-first, accessible, and built in Nairobi by Tehillah Kachila.">
-<meta name="theme-color" content="#faf8f3">
+<meta name="theme-color" content="#faf9f7">
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="assets/icon-32.png">
@@ -72,7 +72,7 @@
 </script>
 </head>
 <body>
-<a class="skip" href="#studio">Skip to studio</a>
+<a class="skip" href="#studio">Skip to instrument</a>
 
 <header class="topbar">
   <a class="brand" href="./" aria-label="Zabibu Composer home">
@@ -81,56 +81,73 @@
     <span class="brand-sub">COMPOSER</span>
   </a>
   <nav class="mainnav" aria-label="Sections">
-    <a href="#studio">Studio</a>
+    <a href="#studio">Instrument</a>
     <a href="#arpeggios" data-open="arpeggios">Arpeggios</a>
     <a href="#samples" data-open="samples">Samples</a>
     <a href="#gallery" data-open="gallery">Gallery</a>
     <a href="#about" data-open="about">About</a>
   </nav>
   <div class="top-actions">
-    <button class="btn btn-ghost" id="mode-btn" aria-pressed="true" aria-label="Switch to studio layout">Studio</button>
-    <button class="icon-btn" id="help-btn" aria-label="Help">?</button>
+    <button class="btn btn-ghost" id="top-mode-btn" aria-pressed="true" aria-label="Switch to the studio layout">Studio</button>
+    <button class="icon-btn" id="top-help-btn" aria-label="Help">?</button>
     <a class="btn btn-ghost" href="https://zabibu.vercel.app" target="_blank" rel="noopener">Zabibu Technika ↗</a>
   </div>
 </header>
 
-<main id="studio" class="app">
-  <aside class="rail" aria-label="Tools and instruments">
-    <section class="rail-block">
-      <p class="rail-label">Tools</p>
-      <div class="tool-grid">
-        <button class="tool is-active" data-tool="draw" aria-pressed="true">✎ Draw</button>
-        <button class="tool" data-tool="erase" aria-pressed="false">⌫ Erase</button>
-        <button class="tool" id="undo" aria-label="Undo">↶ Undo</button>
-        <button class="tool" id="redo" aria-label="Redo">↷ Redo</button>
-        <button class="tool" id="clear-layer">Clear layer</button>
-        <button class="tool" id="shuffle">Surprise</button>
-      </div>
-    </section>
+<main id="studio" class="app is-paper">
+  <h1 class="sr-only">Zabibu Composer</h1>
+  <aside class="rail" aria-label="Tools, instruments, and views">
+    <div class="rail-head">
+      <button class="rail-round" id="help-btn" aria-label="Help" title="Help">?</button>
+      <a class="rail-brand" href="https://zabibu.vercel.app" target="_blank" rel="noopener" aria-label="Zabibu Composer by Zabibu Technika">
+        <span class="rail-brand-name">Zabibu</span>
+        <span class="rail-brand-sub">Composer</span>
+      </a>
+    </div>
 
-    <section class="rail-block">
-      <p class="rail-label">Instruments</p>
-      <div class="instruments" id="instrument-list"></div>
-    </section>
+    <div class="rail-tools" id="paper-tools" role="group" aria-label="Tools">
+      <button class="ptool is-active" data-ptool="draw" aria-pressed="true" aria-label="Draw" title="Draw (P)">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 17l1.1-4.2L14.6 2.3a1.6 1.6 0 0 1 2.3 0l.8.8a1.6 1.6 0 0 1 0 2.3L7.2 15.9 3 17z"/></svg>
+      </button>
+      <button class="ptool" data-ptool="erase" aria-pressed="false" aria-label="Erase" title="Erase (E)">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7.2 16.5H16M4.1 12.3l5.6-5.6a1.7 1.7 0 0 1 2.4 0l3.2 3.2a1.7 1.7 0 0 1 0 2.4l-3.5 3.5a1.7 1.7 0 0 1-2.4 0l-5.3-5.3a1.7 1.7 0 0 1 0-2.2z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="ptool" id="undo" aria-label="Undo" title="Undo (Ctrl+Z)">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 8h8.5a4.5 4.5 0 1 1 0 9H8M4 8l3.2-3M4 8l3.2 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="ptool" id="redo" aria-label="Redo" title="Redo (Ctrl+Shift+Z)">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16 8H7.5a4.5 4.5 0 1 0 0 9H12M16 8l-3.2-3M16 8l-3.2 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="ptool" id="clear-layer" aria-label="Clear this layer" title="Clear this layer">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M8 6V4.2h4V6M6 6l.8 9.4a1.4 1.4 0 0 0 1.4 1.3h3.6a1.4 1.4 0 0 0 1.4-1.3L14 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="ptool" id="paper-surprise" aria-label="Surprise me" title="Surprise me">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.2l1.7 4.4 4.4 1.7-4.4 1.7L10 14.4 8.3 10 3.9 8.3 8.3 6.6 10 2.2zM15.4 13.2l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8.8-2z" fill="currentColor"/></svg>
+      </button>
+    </div>
 
-    <section class="rail-block">
-      <p class="rail-label">View</p>
-      <div class="view-grid">
-        <button class="toggle is-on" id="grid-toggle" aria-pressed="true">Grid</button>
-        <button class="toggle is-on" id="names-toggle" aria-pressed="true">Note names</button>
-        <button class="toggle" id="shapes-toggle" aria-pressed="false">Shapes</button>
-        <button class="toggle" id="recolor-btn">Recolor</button>
-        <button class="toggle" id="background-btn">Background</button>
-        <button class="toggle" id="access-btn">Accessibility</button>
-      </div>
-    </section>
+    <div class="rail-palette" id="paper-palette" role="group" aria-label="Instruments"></div>
+
+    <div class="rail-links" aria-label="More">
+      <button data-open="arpeggios">Arpeggios</button>
+      <button data-open="samples">Samples</button>
+      <button data-open="gallery">Gallery</button>
+      <button data-open="background">Backdrop</button>
+      <button data-open="access">Accessibility</button>
+      <button data-open="about">About</button>
+    </div>
+
+    <div class="rail-foot">
+      <button class="rail-round" id="grid-toggle" aria-pressed="false" aria-label="Show the grid" title="Grid">#</button>
+      <button class="rail-round" id="mode-btn" aria-pressed="true" aria-label="Open the full studio">⋯</button>
+    </div>
   </aside>
 
-  <section class="stage">
+  <section class="stage" aria-label="The instrument">
     <div class="stage-head">
       <div class="piece-meta">
         <p class="eyebrow">Visual instrument</p>
-        <h1 id="piece-title">Untitled piece</h1>
+        <h2 id="piece-title">Untitled piece</h2>
         <p class="piece-sub" id="piece-sub">Draw a line. It becomes music.</p>
       </div>
       <div class="layer-tabs" role="tablist" aria-label="Layers">
@@ -146,97 +163,106 @@
       <div class="canvas-cursor" id="canvas-cursor" hidden></div>
     </div>
 
-    <div class="paper-tools" id="paper-tools" role="group" aria-label="Paper tools">
-      <div class="paper-palette" id="paper-palette" role="group" aria-label="Instruments"></div>
-      <div class="paper-actions">
-        <button class="ptool is-active" data-ptool="draw" aria-pressed="true" aria-label="Draw" title="Draw">✎</button>
-        <button class="ptool" data-ptool="erase" aria-pressed="false" aria-label="Erase" title="Erase">⌫</button>
-        <button class="ptool" id="paper-undo" aria-label="Undo" title="Undo">↶</button>
-        <button class="ptool" id="paper-surprise" aria-label="Surprise me" title="Surprise me">✦</button>
+    <section class="deck" aria-label="Sound, time, and layers">
+      <div class="deck-row deck-row-a">
+        <label class="field field-key">Key <select id="key"></select></label>
+        <label class="field field-scale">Scale <select id="scale"></select></label>
+        <label class="field field-range">Range <select id="range"></select></label>
+        <div class="field field-octave">Octave
+          <span class="stepper">
+            <button id="oct-down" aria-label="Octave down">−</button>
+            <output id="octave">0</output>
+            <button id="oct-up" aria-label="Octave up">+</button>
+          </span>
+        </div>
+        <label class="field field-tune">Tune
+          <span class="tune-wrap"><input id="tune" type="number" min="-50" max="50" value="0" inputmode="numeric" aria-label="Tune in cents">¢</span>
+        </label>
       </div>
-    </div>
+
+      <div class="deck-row deck-row-b">
+        <label class="field field-quantize">Quantize <select id="quantize"></select></label>
+        <label class="field field-swing">Swing <select id="swing"></select></label>
+        <div class="field field-click">Click
+          <button class="deck-pill" id="metronome" aria-pressed="false">Off</button>
+        </div>
+        <div class="field field-octave-b">Layers
+          <div class="layer-mini" id="paper-layers" role="group" aria-label="Layers">
+            <button data-layer="0" aria-pressed="true" aria-label="Layer 1">1</button>
+            <button data-layer="1" aria-pressed="false" aria-label="Layer 2">2</button>
+            <button data-layer="2" aria-pressed="false" aria-label="Layer 3">3</button>
+          </div>
+        </div>
+        <div class="field field-export">
+          <button class="deck-pill" data-open="arpeggios">Arpeggio</button>
+          <button class="deck-pill" data-open="export">Export</button>
+        </div>
+      </div>
+
+      <div class="deck-row deck-row-c">
+        <span class="deck-note" id="deck-note">Draw a line. It becomes music.</span>
+      </div>
+    </section>
 
     <div class="transport" role="group" aria-label="Transport">
-      <button class="icon-btn" id="rewind" aria-label="To the beginning">⏮</button>
-      <button class="play-btn" id="play" aria-label="Play">▶</button>
+      <button class="icon-btn transport-icon" id="rewind" aria-label="To the beginning" title="To the beginning">|◀</button>
+      <button class="play-btn" id="play" aria-label="Play" title="Play (Space)">▶</button>
+      <input class="scrub" id="scrub" type="range" min="0" max="1000" value="0" step="1" aria-label="Playhead position">
       <div class="bpm">
         <label for="bpm">BPM</label>
-        <input id="bpm" type="number" min="40" max="220" value="110" inputmode="numeric">
+        <input id="bpm" type="number" min="40" max="220" value="120" inputmode="numeric">
       </div>
-      <button class="btn btn-ghost" id="tap">Tap</button>
-      <button class="btn btn-ghost" id="metronome" aria-pressed="false">Click</button>
-      <button class="btn btn-ghost is-on" id="loop" aria-pressed="true">Loop</button>
+      <button class="transport-text" id="tap">Tap</button>
+      <div class="loop-pills" id="loop-pills" role="group" aria-label="Loop length in bars">
+        <button data-bars="1" aria-pressed="false" aria-label="1 bar">1</button>
+        <button data-bars="2" aria-pressed="false" aria-label="2 bars">2</button>
+        <button data-bars="4" aria-pressed="true" aria-label="4 bars">4</button>
+        <button data-bars="8" aria-pressed="false" aria-label="8 bars">8</button>
+        <button data-bars="16" aria-pressed="false" aria-label="16 bars">16</button>
+      </div>
       <span class="position" id="position">1.1</span>
       <span class="rec-dot" id="rec-dot" hidden>● REC</span>
+      <button class="transport-export" id="transport-export" data-open="export" aria-label="Export your music" title="Export">
+        <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M10 2.6v9.1m0 0 3.4-3.4M10 11.7 6.6 8.3M3.4 13.4v2.3a1.7 1.7 0 0 0 1.7 1.7h9.8a1.7 1.7 0 0 0 1.7-1.7v-2.3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
     </div>
   </section>
 
-  <aside class="panel" aria-label="Sound, time, and export">
+  <aside class="panel" aria-label="Studio">
     <section class="panel-block">
       <h2>Layers</h2>
       <div class="layer-list" id="layer-list"></div>
     </section>
 
     <section class="panel-block">
-      <h2>Sound</h2>
-      <label class="field">Key <select id="key"></select></label>
-      <label class="field">Scale <select id="scale"></select></label>
-      <label class="field">Range <select id="range"></select></label>
-      <div class="inline-fields">
-        <label class="field">Octave
-          <span class="stepper">
-            <button id="oct-down" aria-label="Octave down">−</button>
-            <output id="octave">0</output>
-            <button id="oct-up" aria-label="Octave up">+</button>
-          </span>
-        </label>
-        <label class="field">Tune
-          <span class="tune-wrap"><input id="tune" type="number" min="-50" max="50" value="0" inputmode="numeric"> ¢</span>
-        </label>
-      </div>
+      <h2>Instrument</h2>
+      <div class="instruments" id="instrument-list"></div>
     </section>
 
     <section class="panel-block">
-      <h2>Time</h2>
-      <label class="field">Quantize <select id="quantize"></select></label>
-      <label class="field">Swing <select id="swing"></select></label>
-      <label class="field">Loop
-        <select id="loop-bars">
-          <option value="4">4 bars</option>
-          <option value="8" selected>8 bars</option>
-          <option value="16">16 bars</option>
-        </select>
-      </label>
+      <h2>View</h2>
+      <div class="view-grid">
+        <button class="toggle" id="names-toggle" aria-pressed="false">Note names</button>
+        <button class="toggle" id="shapes-toggle" aria-pressed="false">Shapes</button>
+        <button class="toggle" id="recolor-btn">Recolor</button>
+        <button class="toggle" id="background-btn">Backdrop</button>
+        <button class="toggle" id="access-btn">Accessibility</button>
+      </div>
     </section>
 
     <section class="panel-block quick">
       <h2>Quick create</h2>
       <button class="quick-card" data-open="arpeggios"><strong>Arpeggios</strong><span>African grooves, three ways</span></button>
       <button class="quick-card" data-open="samples"><strong>Sample drawings</strong><span>Spiral, waves, stars, more</span></button>
-      <button class="quick-card" id="surprise"><strong>Surprise me</strong><span>One tap, a new loop</span></button>
+      <button class="quick-card" id="shuffle"><strong>Surprise me</strong><span>One tap, a new loop</span></button>
     </section>
 
     <section class="panel-block export">
-      <details class="export-details">
-        <summary>Export</summary>
-        <div class="export-body">
-          <div class="export-grid">
-            <button data-export="wav">WAV</button>
-            <button data-export="mp3">MP3</button>
-            <button data-export="mp4">MP4</button>
-            <button data-export="ring">Ringtone</button>
-            <button data-export="midi">MIDI</button>
-            <button data-export="project">Project</button>
-          </div>
-          <button class="btn btn-ghost full" id="open-project">Open project…</button>
-          <input type="file" id="project-file" accept=".json,application/json" hidden>
-          <button class="btn btn-ghost full" id="save-gallery">Save to gallery</button>
-          <button class="linkbtn export-m4r" id="export-m4r" type="button">iPhone ringtone (.m4r)</button>
-          <div class="export-progress" id="export-progress" hidden><span></span></div>
-          <p class="fine" id="export-status" role="status">Mix and master are automatic.</p>
-        </div>
-      </details>
+      <button class="btn btn-primary full" data-open="export">Export your music</button>
+      <p class="fine">Mix and master are automatic.</p>
     </section>
+
+    <ol id="note-list" class="sr-only" aria-label="Lines and notes in the active layer"></ol>
   </aside>
 </main>
 
@@ -276,6 +302,29 @@
   <div class="dialog-actions">
     <button class="btn btn-primary" id="sample-random">Draw a random shape</button>
   </div>
+</dialog>
+
+<!-- Export -->
+<dialog class="dialog" id="export-dialog" aria-labelledby="export-title">
+  <div class="dialog-head">
+    <div><p class="eyebrow">Finished music</p><h2 id="export-title">Export</h2></div>
+    <button class="icon-btn" data-close aria-label="Close">×</button>
+  </div>
+  <p class="dialog-lead">Every file is mixed and mastered for you. Choose a format.</p>
+  <div class="export-grid">
+    <button data-export="wav">WAV</button>
+    <button data-export="mp3">MP3</button>
+    <button data-export="mp4">MP4</button>
+    <button data-export="ring">Ringtone</button>
+    <button data-export="midi">MIDI</button>
+    <button data-export="project">Project</button>
+  </div>
+  <button class="btn btn-ghost full" id="open-project">Open project…</button>
+  <input type="file" id="project-file" accept=".json,application/json" hidden>
+  <button class="btn btn-ghost full" id="save-gallery">Save to gallery</button>
+  <button class="linkbtn export-m4r" id="export-m4r" type="button">iPhone ringtone (.m4r)</button>
+  <div class="export-progress" id="export-progress" hidden><span></span></div>
+  <p class="fine" id="export-status" role="status">Mix and master are automatic.</p>
 </dialog>
 
 <!-- Gallery -->
@@ -320,7 +369,7 @@
     <label class="switch-row"><span>High contrast</span><input type="checkbox" id="a-contrast"></label>
     <label class="switch-row"><span>Large controls</span><input type="checkbox" id="a-large"></label>
     <label class="switch-row"><span>Reduce motion</span><input type="checkbox" id="a-motion"></label>
-    <label class="switch-row"><span>Show note names</span><input type="checkbox" id="a-names" checked></label>
+    <label class="switch-row"><span>Show note names</span><input type="checkbox" id="a-names"></label>
     <label class="switch-row"><span>Shape-coded notes</span><input type="checkbox" id="a-shapes"></label>
   </div>
   <h3 class="dialog-subhead">Keyboard composer</h3>
@@ -337,7 +386,7 @@
 <!-- Backgrounds -->
 <dialog class="dialog" id="background-dialog" aria-labelledby="bg-title">
   <div class="dialog-head">
-    <div><p class="eyebrow">Stage</p><h2 id="bg-title">Background</h2></div>
+    <div><p class="eyebrow">Stage</p><h2 id="bg-title">Backdrop</h2></div>
     <button class="icon-btn" data-close aria-label="Close">×</button>
   </div>
   <div class="bg-grid" id="bg-grid"></div>
@@ -365,9 +414,9 @@
     <button class="icon-btn" data-close aria-label="Close">×</button>
   </div>
   <ol class="help-steps">
-    <li><strong>Pick an instrument.</strong> Each color is a different sound.</li>
-    <li><strong>Draw on the canvas.</strong> Left to right is time; up and down is pitch. The line itself is the music: a curve glides, a vertical stroke strums.</li>
-    <li><strong>Press play.</strong> The loop repeats. Add more layers with 1, 2, and 3.</li>
+    <li><strong>Pick an instrument.</strong> The nine dots in the left rail are nine sounds.</li>
+    <li><strong>Draw across the paper.</strong> Left to right is time; up and down is pitch. The ink lands on the scale, so every line is in tune.</li>
+    <li><strong>Press play.</strong> The loop repeats. Tap the beat dots or change the tempo under the paper.</li>
     <li><strong>Export.</strong> WAV, MP3, MP4, MIDI, or a 30-second ringtone — mixed and mastered for you.</li>
   </ol>
   <div class="dialog-actions">
@@ -378,7 +427,6 @@
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <div id="sr-status" class="sr-only" aria-live="polite"></div>
-<ol id="note-list" class="sr-only" aria-label="Lines and notes in the active layer"></ol>
 
 <script type="module" src="js/app.js"></script>
 </body>

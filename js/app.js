@@ -16,7 +16,7 @@ import {
   stepBeats,
 } from "./config.js";
 import * as store from "./state.js";
-import { ensureContext, previewNote, Transport } from "./audio.js";
+import { ensureContext, previewNote, startLive, setLiveMidi, stopLive, Transport } from "./audio.js";
 import { ScoreRenderer } from "./render.js";
 import { layerLineCount, strokeSummary } from "./lines.js";
 import { SAMPLE_SHAPES, sampleSvg, randomSample } from "./samples.js";
@@ -48,6 +48,7 @@ let cursor = { time: 0, midi: 60, duration: 0.25 };
 let cursorActive = false;
 let drawing = false;
 let liveStroke = null;
+let liveMidi = -1;
 let lastPreviewMidi = -1;
 let lastPreviewAt = 0;
 let exportBusy = false;
@@ -119,6 +120,7 @@ function openDialog(id) {
     background: "background-dialog",
     recolor: "recolor-dialog",
     help: "help-dialog",
+    export: "export-dialog",
   };
   $$("dialog[open]").forEach((dialog) => dialog.close());
   const dialog = document.getElementById(dialogIds[id] || `${id}-dialog`);
@@ -151,7 +153,6 @@ function initControls() {
   fillSelect($("#range"), RANGES.map((n) => [n, `${n} octave${n > 1 ? "s" : ""}`]), String(state.range));
   fillSelect($("#quantize"), Object.entries(QUANTIZE).map(([id, q]) => [id, q.label]), state.quantize);
   fillSelect($("#swing"), Object.entries(SWINGS).map(([id, s]) => [id, s.label]), state.swing);
-  fillSelect($("#loop-bars"), [[4, "4 bars"], [8, "8 bars"], [16, "16 bars"]], String(state.loopBars));
   $("#bpm").value = state.bpm;
   $("#tune").value = state.tune;
 
@@ -160,9 +161,12 @@ function initControls() {
   $("#range").addEventListener("change", (event) => store.setSetting("range", Number(event.target.value)));
   $("#quantize").addEventListener("change", (event) => store.setSetting("quantize", event.target.value));
   $("#swing").addEventListener("change", (event) => store.setSetting("swing", event.target.value));
-  $("#loop-bars").addEventListener("change", (event) => {
-    store.setSetting("loopBars", Number(event.target.value));
+  $("#loop-pills").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-bars]");
+    if (!button) return;
+    store.setSetting("loopBars", Number(button.dataset.bars));
     cursor.time = Math.min(cursor.time, state.loopBars * 4);
+    syncLoopPills();
   });
   $("#bpm").addEventListener("change", (event) => {
     const value = clamp(Number(event.target.value) || 110, 40, 220);
@@ -274,12 +278,6 @@ function buildTools() {
       announce("Undone.");
     }
   });
-  $("#paper-undo").addEventListener("click", () => {
-    if (store.undo()) {
-      toast("Undone");
-      announce("Undone.");
-    }
-  });
   $("#redo").addEventListener("click", () => {
     if (store.redo()) {
       toast("Redone");
@@ -294,7 +292,7 @@ function buildTools() {
 }
 
 function buildLayers() {
-  const tabs = $$(".layer-tabs [data-layer]");
+  const tabs = $$(".layer-tabs [data-layer], #paper-layers [data-layer]");
   tabs.forEach((tab) => {
     tab.addEventListener("click", () => {
       store.setActiveLayer(Number(tab.dataset.layer));
@@ -325,11 +323,17 @@ function buildLayers() {
 }
 
 function renderLayers() {
-  const tabs = $$(".layer-tabs [data-layer]");
-  tabs.forEach((tab, index) => {
+  const tabs = $$(".layer-tabs [data-layer], #paper-layers [data-layer]");
+  tabs.forEach((tab) => {
+    const index = Number(tab.dataset.layer);
     const active = index === state.activeLayer;
-    tab.setAttribute("aria-selected", String(active));
-    tab.tabIndex = active ? 0 : -1;
+    if (tab.getAttribute("role") === "tab") {
+      tab.setAttribute("aria-selected", String(active));
+      tab.tabIndex = active ? 0 : -1;
+    } else {
+      tab.setAttribute("aria-pressed", String(active));
+    }
+    tab.classList.toggle("is-active", active);
   });
 
   $("#layer-list").innerHTML = state.layers.map((layer, index) => `
@@ -357,6 +361,10 @@ function initPaperMode() {
     paperMode = !paperMode;
     applyPaperMode(true);
   });
+  $("#top-mode-btn").addEventListener("click", () => {
+    paperMode = !paperMode;
+    applyPaperMode(true);
+  });
   window.addEventListener("resize", () => {
     if (!renderer) return;
     renderer.resize();
@@ -373,8 +381,13 @@ function applyPaperMode(announceChange) {
   const button = $("#mode-btn");
   if (button) {
     button.setAttribute("aria-pressed", String(paperMode));
-    button.textContent = paperMode ? "Studio" : "Paper";
-    button.setAttribute("aria-label", paperMode ? "Open the full studio layout" : "Switch to the paper layout");
+    button.setAttribute("aria-label", paperMode ? "Open the full studio" : "Return to the paper instrument");
+    button.title = paperMode ? "Studio" : "Paper";
+  }
+  const topButton = $("#top-mode-btn");
+  if (topButton) {
+    topButton.setAttribute("aria-pressed", String(paperMode));
+    topButton.textContent = paperMode ? "Paper" : "Studio";
   }
   try { localStorage.setItem(PAPER_KEY, paperMode ? "1" : "0"); } catch (err) { /* storage may be blocked */ }
   if (renderer) {
@@ -437,16 +450,12 @@ function initCanvas() {
     if (!last || Math.hypot((px - last.x) * renderer.width, (py - last.y) * renderer.height) > 1.2) {
       liveStroke.points.push({ x: px, y: py });
     }
-    // The ink is the score: drawing sounds the pitch under the pen right away.
-    const previewMidi = renderer.pitchAtY(y);
-    const midi = renderer.yToMidi(y);
-    const now = performance.now();
-    if (previewMidi !== lastPreviewMidi && now - lastPreviewAt > 32) {
-      lastPreviewMidi = previewMidi;
-      lastPreviewAt = now;
-      ensureContext()
-        .then(() => previewNote(previewMidi, state.instrument, { velocity: 0.6, duration: 0.16 }))
-        .catch(() => {});
+    // The ink is the score. While the pen is down, one soft voice follows the
+    // quantized pitch under it: no pitch jitter, no burst of notes.
+    const midi = renderer.pitchAtY(y);
+    if (midi !== liveMidi) {
+      liveMidi = midi;
+      setLiveMidi(midi);
     }
     cursor = { time: renderer.xToTime(x), midi, duration: stepBeats(state) };
     renderer.draw(transport?.isPlaying() ? transport.position() : 0, {
@@ -463,7 +472,15 @@ function initCanvas() {
     drawing = true;
     lastPreviewMidi = -1;
     lastPreviewAt = 0;
+    liveMidi = -1;
     liveStroke = state.tool === "erase" ? null : { instrument: state.instrument, points: [] };
+    if (liveStroke) {
+      const { y } = pointerPosition(event);
+      liveMidi = renderer.pitchAtY(y);
+      startLive(state.instrument, liveMidi).catch(() => {});
+    } else {
+      stopLive();
+    }
     canvas.setPointerCapture?.(event.pointerId);
     drawAt(event);
   });
@@ -475,6 +492,8 @@ function initCanvas() {
   const endDraw = () => {
     if (!drawing) return;
     drawing = false;
+    stopLive();
+    liveMidi = -1;
     if (liveStroke && liveStroke.points.length > 1) {
       store.addStroke(liveStroke);
       const lines = layerLineCount(state.layers[state.activeLayer], state);
@@ -488,8 +507,9 @@ function initCanvas() {
   };
   canvas.addEventListener("pointerup", endDraw);
   canvas.addEventListener("pointercancel", endDraw);
-  canvas.addEventListener("pointerleave", () => {
-    if (!drawing) return;
+  window.addEventListener("pointerup", endDraw);
+  window.addEventListener("blur", () => {
+    if (drawing) endDraw();
   });
 
   canvas.addEventListener("focus", () => {
@@ -611,13 +631,7 @@ function initTransport() {
   });
   $("#metronome").addEventListener("click", () => {
     store.setSetting("metronome", !state.metronome);
-    $("#metronome").setAttribute("aria-pressed", String(state.metronome));
-    $("#metronome").classList.toggle("is-on", state.metronome);
-  });
-  $("#loop").addEventListener("click", () => {
-    store.setSetting("loop", !state.loop);
-    $("#loop").setAttribute("aria-pressed", String(state.loop));
-    $("#loop").classList.toggle("is-on", state.loop);
+    syncMetronome();
   });
   $("#tap").addEventListener("click", () => {
     const now = performance.now();
@@ -644,7 +658,42 @@ function initTransport() {
     store.setSetting("bpm", value);
   });
 
+  const scrub = $("#scrub");
+  const scrubBeat = () => (Number(scrub.value) / 1000) * Math.max(1, (state.loopBars || 4) * 4);
+  scrub.addEventListener("input", () => {
+    if (transport.isPlaying()) return;
+    const beat = scrubBeat();
+    $("#position").textContent = barsToPosition(beat);
+    renderer?.draw(beat, { playing: false, cursor: cursorActive ? cursor : null });
+  });
+  scrub.addEventListener("change", () => {
+    scrub.blur();
+    const beat = scrubBeat();
+    if (transport.isPlaying()) {
+      transport.stop();
+      setTimeout(() => transport.play(beat), 30);
+    } else {
+      renderer?.draw(beat, { playing: false, cursor: cursorActive ? cursor : null });
+    }
+  });
+
   requestAnimationFrame(frame);
+}
+
+function syncMetronome() {
+  const button = $("#metronome");
+  if (!button) return;
+  button.classList.toggle("is-on", Boolean(state.metronome));
+  button.setAttribute("aria-pressed", String(Boolean(state.metronome)));
+  button.textContent = state.metronome ? "On" : "Off";
+}
+
+function syncLoopPills() {
+  $$("#loop-pills [data-bars]").forEach((button) => {
+    const active = Number(button.dataset.bars) === state.loopBars;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
 }
 
 function togglePlay() {
@@ -670,6 +719,7 @@ function frame(now) {
       lastFrameAt = now;
       const position = transport.position();
       $("#position").textContent = barsToPosition(position);
+      $("#scrub").value = String(Math.round((position / Math.max(1, state.loopBars * 4)) * 1000));
       renderer?.draw(position, {
         playing: true,
         cursor: cursorActive ? cursor : null,
@@ -684,10 +734,14 @@ function frame(now) {
 
 function syncTransport() {
   const playing = transport?.isPlaying();
-  $("#play").textContent = playing ? "■" : "▶";
+  $("#play").textContent = playing ? "❚❚" : "▶";
   $("#play").setAttribute("aria-label", playing ? "Stop" : "Play");
+  $("#play").classList.toggle("is-playing", playing);
   $("#rec-dot").hidden = true;
-  if (!playing) $("#position").textContent = "1.1";
+  if (!playing) {
+    $("#position").textContent = "1.1";
+    $("#scrub").value = "0";
+  }
 }
 
 /* ---------- UI sync ---------- */
@@ -704,8 +758,14 @@ function syncUI(reason = "change") {
   $("#range").value = String(state.range);
   $("#quantize").value = state.quantize;
   $("#swing").value = state.swing;
-  $("#loop-bars").value = String(state.loopBars);
   $("#octave").textContent = state.octave > 0 ? `+${state.octave}` : String(state.octave);
+  const note = $("#deck-note");
+  if (note) {
+    const steps = Math.round((state.loopBars * 4) / stepBeats(state));
+    note.textContent = `${state.loopBars} bars · ${steps} steps · ${INSTRUMENT_BY_ID[state.instrument]?.name || "Keys"}`;
+  }
+  syncLoopPills();
+  syncMetronome();
 
   renderLayers();
   $$("[data-instrument]").forEach((button) => {
@@ -727,13 +787,12 @@ function syncUI(reason = "change") {
   $("#names-toggle").setAttribute("aria-pressed", String(state.names));
   $("#shapes-toggle").classList.toggle("is-on", state.shapes);
   $("#shapes-toggle").setAttribute("aria-pressed", String(state.shapes));
-  $("#metronome").classList.toggle("is-on", state.metronome);
-  $("#metronome").setAttribute("aria-pressed", String(state.metronome));
-  $("#loop").classList.toggle("is-on", state.loop);
-  $("#loop").setAttribute("aria-pressed", String(state.loop));
   syncTransport();
   updateNoteList();
   applyA11y();
+  if (transport?.isPlaying() && /stroke|note|layer|instrument|setting|project|undo|redo/.test(reason)) {
+    transport.refresh();
+  }
   if (renderer) {
     renderer.draw(transport?.isPlaying() ? transport.position() : 0, {
       playing: transport?.isPlaying(),

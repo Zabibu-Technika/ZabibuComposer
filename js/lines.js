@@ -1,29 +1,103 @@
-import { clamp } from "./config.js";
+import { clamp, scaleNotes, stepBeats } from "./config.js";
 
-// A drawn line is played as a line. The page is a picture of sound: time runs
-// left to right, pitch runs bottom to top, and the playhead reads the ink at
-// each moment. We scan the stroke into narrow columns, collect every pitch the
-// ink touches in a column, and merge runs of the same pitch into single notes.
-// A gentle diagonal becomes a glissando, a vertical stroke becomes a strum, and
-// loops or spirals keep every crossing (the playhead meets the same ink twice).
+// Drawing is free; sound is ruled.
 //
-// Pitch is continuous, not snapped to the scale: drawing is free. The scale
-// still shapes arpeggios and the keyboard composer.
+// The page is a piece of ruled paper. Time runs left to right in equal steps and
+// pitch runs bottom to top in scale rows. A stroke is read into that lattice:
+// every step the ink crosses, every pitch row it touches. Contiguous rows in one
+// step are a chord; a row that stays lit for several steps is one held note.
 //
-// Results are cached per stroke until the key, octave, range, or loop length
-// changes.
+// This is what makes the instrument sound clean: the ear hears a quantized
+// melody, never a continuous slide. The eye still sees the ink as it was drawn.
 
-const BEAT_RESOLUTION = 1 / 24;
-const MIN_BINS = 96;
-const MAX_BINS = 512;
-const MIN_LENGTH = 0.04;
-const MAX_EVENTS = 160;
-const PITCH_STEP = 1; // semitone detail: fine enough to glide, sparse enough to breathe
-
+const ROWS = 32;
+const MAX_LANES = 3;
+const MAX_EVENTS = 480;
 const cache = new WeakMap();
 
 function signature(state) {
-  return `${state.key}|${state.octave}|${state.range}|${state.loopBars}`;
+  return [
+    state.key ?? 0,
+    state.scale || "",
+    state.range ?? 2,
+    state.octave ?? 0,
+    state.quantize || "",
+    state.loopBars ?? 4,
+  ].join("|");
+}
+
+export function gridRows() {
+  return ROWS;
+}
+
+export function rowMidi(state, row) {
+  const notes = scaleNotes(state);
+  const index = Math.floor((clamp(row, 0, ROWS - 1) / ROWS) * notes.length);
+  return notes[Math.min(notes.length - 1, Math.max(0, index))];
+}
+
+export function midiRow(state, midi) {
+  const notes = scaleNotes(state);
+  let best = 0;
+  let distance = Infinity;
+  for (let row = 0; row < ROWS; row += 1) {
+    const value = rowMidi(state, row);
+    const d = Math.abs(value - midi);
+    if (d < distance) {
+      distance = d;
+      best = row;
+    }
+  }
+  return best;
+}
+
+function clusters(mask) {
+  const out = [];
+  let remaining = mask;
+  let guard = 0;
+  while (remaining !== 0n && out.length < MAX_LANES && guard < 64) {
+    guard += 1;
+    let start = 0;
+    while (start < 64 && ((remaining >> BigInt(start)) & 1n) === 0n) start += 1;
+    if (start >= 64) break;
+    let end = start;
+    while (end + 1 < 64 && ((remaining >> BigInt(end + 1)) & 1n) !== 0n) end += 1;
+    out.push(Math.floor((start + end) / 2));
+    const length = BigInt(end - start + 1);
+    remaining &= ~(((1n << length) - 1n) << BigInt(start));
+  }
+  return out;
+}
+
+function rowMasks(points, steps) {
+  const masks = new Array(steps).fill(0n);
+  if (!points || points.length < 1) return masks;
+  let previous = null;
+  const edge = 0.5 / steps;
+
+  for (const point of points) {
+    const x = clamp(Number(point.x) || 0, 0, 1);
+    const y = clamp(Number(point.y) || 0, 0, 1);
+    const step = Math.min(steps - 1, Math.max(0, Math.floor(x * steps)));
+    const row = Math.round((1 - y) * (ROWS - 1));
+
+    masks[step] |= 1n << BigInt(row);
+    // A note held at either edge is felt at the loop boundary too.
+    if (x <= edge) masks[0] |= 1n << BigInt(row);
+    if (x >= 1 - edge) masks[steps - 1] |= 1n << BigInt(row);
+
+    if (previous && Math.abs(step - previous.step) > 1) {
+      const low = Math.min(previous.step, step);
+      const high = Math.max(previous.step, step);
+      for (let s = low + 1; s < high; s += 1) {
+        const t = (s - previous.step) / (step - previous.step);
+        const r = Math.round(previous.row + t * (row - previous.row));
+        masks[s] |= 1n << BigInt(Math.max(0, Math.min(ROWS - 1, r)));
+      }
+    }
+    previous = { step, row };
+  }
+  return masks;
 }
 
 export function strokeEvents(stroke, state) {
@@ -32,100 +106,58 @@ export function strokeEvents(stroke, state) {
   const cached = cache.get(stroke);
   if (cached && cached.key === key) return cached.events;
 
-  const loopBeats = Math.max(1, (state.loopBars || 8) * 4);
-  const base = 48 + (state.key || 0) + (state.octave || 0) * 12;
-  const span = 12 * Math.max(1, state.range || 2);
-  const bins = clamp(Math.round(loopBeats / BEAT_RESOLUTION), MIN_BINS, MAX_BINS);
-  const pitchAt = (y) =>
-    Math.round((base + clamp(1 - y, 0, 1) * span) / PITCH_STEP) * PITCH_STEP;
-  const columns = Array.from({ length: bins }, () => new Set());
+  const loopBeats = Math.max(1, (state.loopBars || 4) * 4);
+  const step = Math.max(1 / 32, stepBeats(state));
+  const steps = clamp(Math.round(loopBeats / step), 4, 512);
+  const masks = rowMasks(stroke.points, steps);
+  const lanes = [[], [], []];
 
-  const addAt = (x, y) => {
-    const bin = clamp(Math.floor(clamp(x, 0, 1) * bins), 0, bins - 1);
-    columns[bin].add(pitchAt(y));
-  };
-
-  // Rasterise each segment into the columns it crosses. Vertical segments fill
-  // one column with every pitch they pass, which the playhead reads as a chord.
-  const points = stroke.points;
-  for (let i = 1; i < points.length; i += 1) {
-    const a = points[i - 1];
-    const b = points[i];
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    if (Math.abs(dx) < 0.0002) {
-      const steps = Math.max(1, Math.ceil(Math.abs(dy) / 0.012));
-      for (let s = 0; s <= steps; s += 1) addAt(a.x, a.y + dy * (s / steps));
-      continue;
-    }
-    const left = Math.min(a.x, b.x);
-    const right = Math.max(a.x, b.x);
-    const firstBin = clamp(Math.floor(clamp(left, 0, 1) * bins), 0, bins - 1);
-    const lastBin = clamp(Math.floor(clamp(right, 0, 1) * bins), 0, bins - 1);
-    for (let bin = firstBin; bin <= lastBin; bin += 1) {
-      const x = (bin + 0.5) / bins;
-      if (x < left - 0.5 / bins || x > right + 0.5 / bins) continue;
-      addAt(x, a.y + ((x - a.x) / dx) * dy);
-    }
-    // Keep the exact endpoints too, so short gestures survive rounding.
-    addAt(a.x, a.y);
-    addAt(b.x, b.y);
-  }
-
-  // Merge a pitch that is present in neighbouring columns into one held note.
-  const active = new Map();
-  const runs = [];
-  const closeRun = (run, endBin) => {
-    runs.push({
-      midi: run.midi,
-      startBin: run.startBin,
-      endBin: Math.max(run.startBin, endBin),
-    });
-  };
-  for (let bin = 0; bin < bins; bin += 1) {
-    const pitches = columns[bin];
-    for (const [midi, run] of active) {
-      if (!pitches.has(midi)) {
-        closeRun(run, bin - 1);
-        active.delete(midi);
-      }
-    }
-    for (const midi of pitches) {
-      const run = active.get(midi);
-      if (run) run.endBin = bin;
-      else active.set(midi, { midi, startBin: bin, endBin: bin });
+  for (let s = 0; s < steps; s += 1) {
+    if (masks[s] === 0n) continue;
+    const centers = clusters(masks[s]);
+    for (let lane = 0; lane < centers.length; lane += 1) {
+      lanes[lane].push({ step: s, midi: rowMidi(state, centers[lane]) });
     }
   }
-  for (const run of active.values()) closeRun(run, bins - 1);
 
-  const beatFor = (bin) => (bin / bins) * loopBeats;
-  const events = runs
-    .map((run) => {
-      const start = beatFor(run.startBin);
-      const duration = beatFor(run.endBin - run.startBin + 1);
-      const span = run.endBin - run.startBin + 1;
-      return {
-        time: Math.round(start * 1000) / 1000,
+  const events = [];
+  const noteStep = loopBeats / steps;
+
+  lanes.forEach((lane, laneIndex) => {
+    let run = null;
+    let phrase = 0;
+    let previousEnd = -2;
+    const close = () => {
+      if (!run) return;
+      events.push({
+        time: Math.round(run.start * noteStep * 1000) / 1000,
         midi: run.midi,
-        duration: Math.round(clamp(duration, MIN_LENGTH, 8) * 1000) / 1000,
-        velocity: clamp(0.56 + Math.min(span, 18) * 0.018, 0.52, 0.9),
-        startBin: run.startBin,
-        endBin: run.endBin,
-      };
-    })
-    .sort((a, b) => a.time - b.time || a.midi - b.midi)
-    .slice(0, MAX_EVENTS);
-
-  events.forEach((event, index) => {
-    const next = events[index + 1];
-    const end = event.time + event.duration;
-    event.pitchTo =
-      next && next.time >= end - 0.001 && next.time - event.time > 0.02 ? next.midi : event.midi;
-    delete event.startBin;
-    delete event.endBin;
+        duration: Math.round((run.end - run.start + 1) * noteStep * 1000) / 1000,
+        velocity: run.velocity,
+        lane: laneIndex,
+        phrase: run.phrase,
+      });
+      previousEnd = run.end;
+      run = null;
+    };
+    lane.forEach((cell, index) => {
+      if (run && cell.midi === run.midi && cell.step === lane[index - 1].step + 1) {
+        run.end = cell.step;
+        return;
+      }
+      // A gap starts a new phrase (a new breath); a pitch change inside a
+      // continuous line stays in the same phrase, so one voice can step
+      // through the melody instead of restriking every note.
+      if (run && run.end < cell.step - 1) phrase += 1;
+      else if (!run && previousEnd >= 0 && cell.step > previousEnd + 1) phrase += 1;
+      close();
+      run = { midi: cell.midi, start: cell.step, end: cell.step, velocity: 0.82, phrase };
+    });
+    close();
   });
 
-  const frozen = events;
+  events.sort((a, b) => a.time - b.time || a.midi - b.midi);
+  const frozen = events.slice(0, MAX_EVENTS);
   cache.set(stroke, { key, events: frozen });
   return frozen;
 }
@@ -144,7 +176,9 @@ export function strokeSummary(stroke, state) {
   };
 }
 
-// Total line events per layer, for the screen-reader list and status lines.
 export function layerLineCount(layer, state) {
-  return (layer.strokes || []).reduce((sum, stroke) => sum + strokeEvents(stroke, state).length, 0);
+  return (layer.strokes || []).reduce(
+    (sum, stroke) => sum + strokeEvents(stroke, state).length,
+    0
+  );
 }

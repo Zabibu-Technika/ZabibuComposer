@@ -5,17 +5,10 @@ import {
   midiToName,
   scaleNotes,
 } from "./config.js";
+import { gridRows, midiRow, rowMidi } from "./lines.js";
 
-function roundedRect(ctx, x, y, w, h, r) {
-  const radius = Math.min(r, w / 2, h / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + radius, y);
-  ctx.arcTo(x + w, y, x + w, y + h, radius);
-  ctx.arcTo(x + w, y + h, x, y + h, radius);
-  ctx.arcTo(x, y + h, x, y, radius);
-  ctx.arcTo(x, y, x + w, y, radius);
-  ctx.closePath();
-}
+// The page itself is almost blank. Ink, a playhead, and only the faintest rules
+// when the grid is asked for. Everything else lives off the paper.
 
 const CONTRAST_COLORS = ["#ffe600", "#00e5ff", "#ffffff", "#ff9e00", "#ff5edb", "#7dff6a", "#6ab7ff", "#d9d9d9", "#ffd0a8"];
 
@@ -23,138 +16,134 @@ function isDarkBackground(state) {
   return state.background === "dusk" || state.background === "sunset" || Boolean(state.backgroundImage);
 }
 
-const backdropCache = new Map();
-const photoCache = new WeakMap();
-
-function paintBackground(ctx, state, width, height, photo) {
-  const dark = isDarkBackground(state);
-  if (state.backgroundImage && photo && photo.complete) {
+function drawBackdrop(ctx, state, width, height, photo) {
+  if (state.backgroundImage && photo && photo.complete && photo.naturalWidth) {
     const ratio = Math.max(width / photo.width, height / photo.height);
     const w = photo.width * ratio;
     const h = photo.height * ratio;
     ctx.drawImage(photo, (width - w) / 2, (height - h) / 2, w, h);
-    ctx.fillStyle = "rgba(5, 5, 7, 0.22)";
+    ctx.fillStyle = "rgba(5, 5, 7, 0.2)";
     ctx.fillRect(0, 0, width, height);
-    return dark;
+    return;
   }
-
   if (state.background === "sky") {
     const gradient = ctx.createLinearGradient(0, 0, 0, height);
-    gradient.addColorStop(0, "#93b6df");
-    gradient.addColorStop(0.6, "#b9cde8");
-    gradient.addColorStop(1, "#e9f1f8");
+    gradient.addColorStop(0, "#a9c4e2");
+    gradient.addColorStop(0.62, "#c8daee");
+    gradient.addColorStop(1, "#eef4f9");
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, height);
-    const sun = ctx.createRadialGradient(width * 0.82, height * 0.16, 0, width * 0.82, height * 0.16, height * 0.36);
-    sun.addColorStop(0, "rgba(255,255,255,.95)");
-    sun.addColorStop(1, "rgba(255,255,255,0)");
-    ctx.fillStyle = sun;
-    ctx.fillRect(0, 0, width, height);
-    return dark;
+    return;
   }
-
   if (state.background === "sunset") {
     const gradient = ctx.createLinearGradient(0, 0, 0, height);
-    gradient.addColorStop(0, "#f6c177");
-    gradient.addColorStop(0.45, "#e2725b");
-    gradient.addColorStop(1, "#472d4f");
+    gradient.addColorStop(0, "#f3bd77");
+    gradient.addColorStop(0.5, "#e0775f");
+    gradient.addColorStop(1, "#4a304f");
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, height);
-    const sun = ctx.createRadialGradient(width * 0.7, height * 0.36, 0, width * 0.7, height * 0.36, height * 0.32);
-    sun.addColorStop(0, "rgba(255,240,190,.85)");
-    sun.addColorStop(1, "rgba(255,240,190,0)");
-    ctx.fillStyle = sun;
-    ctx.fillRect(0, 0, width, height);
-    return dark;
+    return;
   }
-
   if (state.background === "dusk") {
     const gradient = ctx.createLinearGradient(0, 0, width, height);
-    gradient.addColorStop(0, "#141425");
-    gradient.addColorStop(0.55, "#2a223d");
-    gradient.addColorStop(1, "#50314f");
+    gradient.addColorStop(0, "#131324");
+    gradient.addColorStop(0.6, "#29223c");
+    gradient.addColorStop(1, "#4c304d");
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = "rgba(255,255,255,.5)";
-    for (let i = 0; i < 60; i += 1) {
-      const x = (i * 137.5) % width;
-      const y = (i * 89.7) % height;
-      ctx.fillRect(x, y, 1.2, 1.2);
-    }
-    return dark;
+    return;
   }
-
-  ctx.fillStyle = state.a11y?.contrast ? "#000000" : "#f3efe6";
+  ctx.fillStyle = state.a11y?.contrast ? "#000000" : "#fffefb";
   ctx.fillRect(0, 0, width, height);
-  if (!state.a11y?.contrast) {
-    ctx.fillStyle = "rgba(107, 94, 72, 0.12)";
-    for (let y = 8; y < height; y += 11) {
-      for (let x = (y % 22 === 0 ? 0 : 5); x < width; x += 13) {
-        ctx.fillRect(x, y, 1, 1);
-      }
-    }
-  }
-  return dark;
 }
 
-function drawBackground(ctx, state, width, height, photo, dpr = 1) {
-  const dark = isDarkBackground(state);
-  const scale = Math.min(2, Math.max(1, dpr));
-
-  if (state.backgroundImage && photo) {
-    if (photo.complete && photo.naturalWidth) {
-      const cached = photoCache.get(photo);
-      if (cached && cached.width === Math.round(width * scale) && cached.height === Math.round(height * scale)) {
-        ctx.drawImage(cached.canvas, 0, 0, width, height);
-        return dark;
-      }
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.round(width * scale);
-      canvas.height = Math.round(height * scale);
-      const offscreen = canvas.getContext("2d");
-      if (offscreen) {
-        offscreen.setTransform(scale, 0, 0, scale, 0, 0);
-        paintBackground(offscreen, state, width, height, photo);
-        photoCache.set(photo, { canvas, width: canvas.width, height: canvas.height });
-        ctx.drawImage(canvas, 0, 0, width, height);
-        return dark;
-      }
-    }
-    paintBackground(ctx, state, width, height, photo);
-    return dark;
-  }
-
-  const key = `${state.background}|${state.a11y?.contrast ? "c" : "n"}|${Math.round(width)}x${Math.round(height)}x${scale}`;
-  let canvas = backdropCache.get(key);
-  if (!canvas) {
-    canvas = document.createElement("canvas");
-    canvas.width = Math.round(width * scale);
-    canvas.height = Math.round(height * scale);
-    const offscreen = canvas.getContext("2d");
-    if (!offscreen) return paintBackground(ctx, state, width, height, photo);
-    offscreen.setTransform(scale, 0, 0, scale, 0, 0);
-    paintBackground(offscreen, state, width, height, photo);
-    if (backdropCache.size > 6) backdropCache.clear();
-    backdropCache.set(key, canvas);
-  }
-  ctx.drawImage(canvas, 0, 0, width, height);
-  return dark;
+function hash(number) {
+  let value = (Math.imul(number | 0, 2654435761) + 97) >>> 0;
+  return () => {
+    value = (Math.imul(value, 1664525) + 1013904223) >>> 0;
+    return value / 4294967296;
+  };
 }
 
-function drawShape(ctx, shape, x, y, r, color, fill = true) {
+function strokeSeed(stroke, index) {
+  if (typeof stroke.id === "number") return stroke.id;
+  const text = String(stroke.id || index);
+  let value = 0;
+  for (let i = 0; i < text.length; i += 1) value = (Math.imul(value, 31) + text.charCodeAt(i)) >>> 0;
+  return value;
+}
+
+function drawInk(ctx, points, color, width, height, alpha, seed, contrast) {
+  if (!points || points.length < 1) return;
+  const k = Math.min(1.35, Math.max(0.9, width / 620));
+  const rand = hash(seed);
+  const core = (2.1 + rand() * 0.7) * k;
+  const path = new Path2D();
+  let first = true;
+  for (const point of points) {
+    const x = point.x * width;
+    const y = point.y * height;
+    if (first || point.brk) {
+      path.moveTo(x, y);
+      first = false;
+    } else {
+      path.lineTo(x, y);
+    }
+  }
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.setLineDash([]);
+  ctx.lineWidth = core;
+  ctx.stroke(path);
+
+  if (!contrast) {
+    ctx.globalAlpha = alpha * (0.32 + rand() * 0.18);
+    ctx.lineWidth = core + (1.1 + rand() * 0.7) * k;
+    ctx.setLineDash([(0.6 + rand() * 0.5) * k, (2.6 + rand() * 1.6) * k]);
+    ctx.lineDashOffset = rand() * 10;
+    ctx.stroke(path);
+
+    ctx.globalAlpha = alpha * (0.16 + rand() * 0.13);
+    ctx.lineWidth = core + (2.1 + rand() * 0.9) * k;
+    ctx.setLineDash([(0.5 + rand() * 0.4) * k, (5.5 + rand() * 4) * k]);
+    ctx.lineDashOffset = rand() * 10;
+    ctx.stroke(path);
+  }
+
+  ctx.globalAlpha = alpha;
+  ctx.setLineDash([]);
+  for (let i = 0; i < points.length; i += 1) {
+    const point = points[i];
+    const prevConnected = i > 0 && !point.brk && points[i - 1].x !== point.x;
+    const nextConnected = i + 1 < points.length && !points[i + 1].brk && points[i + 1].x !== point.x;
+    if (!prevConnected && !nextConnected) {
+      ctx.beginPath();
+      ctx.arc(point.x * width, point.y * height, 2.6 * k, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+function drawShape(ctx, shape, x, y, r, color) {
   ctx.save();
   ctx.fillStyle = color;
   ctx.strokeStyle = color;
-  ctx.lineWidth = 1.6;
+  ctx.lineWidth = 1.4;
   if (shape === "triangle") {
     ctx.beginPath();
     ctx.moveTo(x, y - r);
     ctx.lineTo(x + r * 0.95, y + r * 0.72);
     ctx.lineTo(x - r * 0.95, y + r * 0.72);
     ctx.closePath();
-    fill ? ctx.fill() : ctx.stroke();
+    ctx.fill();
   } else if (shape === "square") {
-    fill ? ctx.fillRect(x - r, y - r, r * 2, r * 2) : ctx.strokeRect(x - r, y - r, r * 2, r * 2);
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
   } else if (shape === "diamond") {
     ctx.beginPath();
     ctx.moveTo(x, y - r * 1.1);
@@ -162,128 +151,48 @@ function drawShape(ctx, shape, x, y, r, color, fill = true) {
     ctx.lineTo(x, y + r * 1.1);
     ctx.lineTo(x - r, y);
     ctx.closePath();
-    fill ? ctx.fill() : ctx.stroke();
+    ctx.fill();
   } else if (shape === "ring") {
     ctx.beginPath();
-    ctx.arc(x, y, r * 0.85, 0, Math.PI * 2);
+    ctx.arc(x, y, r * 0.8, 0, Math.PI * 2);
     ctx.stroke();
   } else if (shape === "line") {
-    ctx.fillRect(x - r * 1.4, y - 1.5, r * 2.8, 3);
+    ctx.fillRect(x - r * 1.3, y - 1.3, r * 2.6, 2.6);
   } else if (shape === "star") {
     ctx.beginPath();
     for (let i = 0; i < 10; i += 1) {
       const angle = -Math.PI / 2 + (i * Math.PI) / 5;
-      const radius = i % 2 === 0 ? r * 1.15 : r * 0.45;
+      const radius = i % 2 === 0 ? r * 1.1 : r * 0.43;
       const px = x + Math.cos(angle) * radius;
       const py = y + Math.sin(angle) * radius;
       i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
     }
     ctx.closePath();
-    fill ? ctx.fill() : ctx.stroke();
+    ctx.fill();
   } else if (shape === "bar") {
-    roundedRect(ctx, x - r * 1.6, y - 2.5, r * 3.2, 5, 2.5);
-    fill ? ctx.fill() : ctx.stroke();
+    ctx.fillRect(x - r * 1.5, y - 2, r * 3, 4);
   } else if (shape === "cross") {
-    ctx.fillRect(x - r * 0.9, y - 2, r * 1.8, 4);
-    ctx.fillRect(x - 2, y - r * 0.9, 4, r * 1.8);
+    ctx.fillRect(x - r * 0.9, y - 1.8, r * 1.8, 3.6);
+    ctx.fillRect(x - 1.8, y - r * 0.9, 3.6, r * 1.8);
   } else {
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
-    fill ? ctx.fill() : ctx.stroke();
+    ctx.fill();
   }
   ctx.restore();
 }
 
 export function drawScore(ctx, state, time, width, height, options = {}) {
-  const loopBeats = Math.max(1, (state.loopBars || 8) * 4);
-  const notes = scaleNotes(state);
+  const loopBeats = Math.max(1, (state.loopBars || 4) * 4);
   const dark = options.dark ?? isDarkBackground(state);
   const contrast = state.a11y?.contrast;
-  const pad = {
-    l: width < 560 ? 20 : 38,
-    r: 16,
-    t: 24,
-    b: width < 560 ? 20 : 30,
-  };
-  const innerW = Math.max(20, width - pad.l - pad.r);
-  const innerH = Math.max(20, height - pad.t - pad.b);
-  const xForTime = (beat) => pad.l + (Math.max(0, Math.min(loopBeats, beat)) / loopBeats) * innerW;
-  const yForIndex = (index) =>
-    pad.t + (1 - index / Math.max(1, notes.length - 1)) * innerH;
-  const indexForMidi = (midi) => {
-    let best = 0;
-    let distance = Infinity;
-    for (let i = 0; i < notes.length; i += 1) {
-      const d = Math.abs(notes[i] - midi);
-      if (d < distance) {
-        distance = d;
-        best = i;
-      }
-    }
-    return best;
-  };
-  const yForMidi = (midi) => yForIndex(indexForMidi(midi));
-
-  ctx.clearRect(0, 0, width, height);
-  ctx.save();
-  drawBackground(ctx, state, width, height, options.photo, options.dpr || 1);
-
-  const lineColor = contrast ? "#ffe600" : dark ? "rgba(255,255,255,.22)" : "rgba(26,24,21,.16)";
-  const strongColor = contrast ? "#ffe600" : dark ? "rgba(255,255,255,.5)" : "rgba(26,24,21,.32)";
-  const labelColor = contrast ? "#ffe600" : dark ? "rgba(255,255,255,.7)" : "rgba(26,24,21,.55)";
-  const textColor = contrast ? "#ffe600" : dark ? "rgba(255,255,255,.72)" : "rgba(26,24,21,.6)";
-  const axisFont = width < 560 ? "8px ui-monospace, monospace" : "9px ui-monospace, monospace";
-  const noteFont = width < 560 ? "7px ui-monospace, monospace" : "8px ui-monospace, monospace";
-
-  if (state.grid !== false) {
-    for (let bar = 0; bar <= state.loopBars; bar += 1) {
-      const x = xForTime(bar * 4);
-      ctx.strokeStyle = bar % 4 === 0 ? strongColor : lineColor;
-      ctx.lineWidth = bar % 4 === 0 ? 1.4 : 1;
-      ctx.beginPath();
-      ctx.moveTo(x, pad.t);
-      ctx.lineTo(x, pad.t + innerH);
-      ctx.stroke();
-      if (bar < state.loopBars) {
-        ctx.fillStyle = labelColor;
-        ctx.font = axisFont;
-        ctx.textAlign = "left";
-        ctx.fillText(String(bar + 1), x + 4, pad.t - 8);
-      }
-    }
-    for (let beat = 0; beat <= loopBeats; beat += 1) {
-      if (beat % 4 === 0) continue;
-      const x = xForTime(beat);
-      ctx.strokeStyle = lineColor;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(x, pad.t);
-      ctx.lineTo(x, pad.t + innerH);
-      ctx.stroke();
-    }
-    const step = Math.max(1, Math.floor(notes.length / (height < 420 ? 8 : 14)));
-    for (let i = 0; i < notes.length; i += step) {
-      const y = yForIndex(i);
-      ctx.strokeStyle = lineColor;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(pad.l, y);
-      ctx.lineTo(pad.l + innerW, y);
-      ctx.stroke();
-      if (state.names !== false) {
-        ctx.fillStyle = textColor;
-        ctx.font = axisFont;
-        ctx.textAlign = "right";
-        ctx.fillText(midiToName(notes[i]), pad.l - 6, y + 3);
-      }
-    }
-  }
-
-  const soloed = state.layers.some((layer) => layer.solo);
-  const activeIndex = state.activeLayer || 0;
-  const flashes = options.flashes || new Map();
-  const now = options.now || performance.now();
-
+  const showGrid = Boolean(state.grid);
+  const showNames = showGrid && state.names !== false;
+  const xForTime = (beat) => (clamp(beat, 0, loopBeats) / loopBeats) * width;
+  const notes = scaleNotes(state);
+  const rows = gridRows();
+  const yForRow = (row) => height - ((row + 0.5) / rows) * height;
+  const yForMidi = (midi) => yForRow(midiRow(state, midi));
   const strokeColor = (instrument) => {
     const info = instrumentInfo(state, instrument);
     if (!contrast) return info.color;
@@ -291,96 +200,139 @@ export function drawScore(ctx, state, time, width, height, options = {}) {
     return CONTRAST_COLORS[index % CONTRAST_COLORS.length];
   };
 
-  for (let layerIndex = 0; layerIndex < state.layers.length; layerIndex += 1) {
-    const layer = state.layers[layerIndex];
-    if (layer.muted) continue;
-    if (soloed && !layer.solo) continue;
-    const active = layerIndex === activeIndex;
-    ctx.globalAlpha = active ? 0.72 : 0.2;
-    for (const stroke of layer.strokes || []) {
-      if (!stroke.points || stroke.points.length < 2) continue;
-      const color = strokeColor(stroke.instrument);
-      ctx.lineJoin = "round";
-      ctx.lineCap = "round";
+  ctx.clearRect(0, 0, width, height);
+  ctx.save();
+  drawBackdrop(ctx, state, width, height, options.photo);
+
+  if (showGrid) {
+    // Pitch rows and beats. Roots a shade darker, bars darker still.
+    const rowColor = contrast
+      ? "rgba(255,230,0,.35)"
+      : dark
+        ? "rgba(255,255,255,.12)"
+        : "rgba(138,135,126,.10)";
+    const rootColor = contrast
+      ? "rgba(255,230,0,.7)"
+      : dark
+        ? "rgba(255,255,255,.3)"
+        : "rgba(138,135,126,.22)";
+    const beatColor = contrast
+      ? "rgba(255,230,0,.45)"
+      : dark
+        ? "rgba(255,255,255,.16)"
+        : "rgba(138,135,126,.12)";
+    const barColor = contrast
+      ? "rgba(255,230,0,.8)"
+      : dark
+        ? "rgba(255,255,255,.4)"
+        : "rgba(138,135,126,.32)";
+
+    let lastMidi = null;
+    for (let row = 0; row < rows; row += 1) {
+      const midi = rowMidi(state, row);
+      if (row > 0) {
+        const isRoot = ((midi % 12) + 12) % 12 === ((state.key || 0) % 12);
+        ctx.strokeStyle = isRoot ? rootColor : rowColor;
+        ctx.lineWidth = 1;
+        const y = Math.round(yForRow(row)) + 0.5;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+        ctx.stroke();
+      }
+      if (showNames && midi !== lastMidi && row % 2 === 0) {
+        ctx.fillStyle = contrast
+          ? "rgba(255,230,0,.8)"
+          : dark
+            ? "rgba(255,255,255,.55)"
+            : "rgba(26,25,22,.42)";
+        ctx.font = "9px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText(midiToName(midi), 6, yForRow(row));
+      }
+      lastMidi = midi;
+    }
+
+    const beats = Math.max(1, Math.round(loopBeats));
+    for (let beat = 1; beat < beats; beat += 1) {
+      const x = Math.round(xForTime(beat)) + 0.5;
+      ctx.strokeStyle = beat % 4 === 0 ? barColor : beatColor;
+      ctx.lineWidth = beat % 4 === 0 ? 1.2 : 1;
       ctx.beginPath();
-      stroke.points.forEach((point, index) => {
-        const px = pad.l + point.x * innerW;
-        const py = pad.t + point.y * innerH;
-        index === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
-      });
-      ctx.strokeStyle = color;
-      ctx.globalAlpha = active ? 0.16 : 0.06;
-      ctx.lineWidth = active ? 7 : 4.5;
-      ctx.stroke();
-      ctx.globalAlpha = active ? 0.92 : 0.24;
-      ctx.strokeStyle = color;
-      ctx.lineWidth = active ? 2.1 : 1.3;
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, height);
       ctx.stroke();
     }
   }
 
-  if (options.liveStroke && options.liveStroke.points?.length > 1) {
-    ctx.globalAlpha = 0.9;
-    ctx.strokeStyle = strokeColor(options.liveStroke.instrument);
-    ctx.lineWidth = 2.4;
-    ctx.lineJoin = "round";
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    options.liveStroke.points.forEach((point, index) => {
-      const px = pad.l + point.x * innerW;
-      const py = pad.t + point.y * innerH;
-      index === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
-    });
-    ctx.stroke();
-  }
-  ctx.globalAlpha = 1;
+  const soloed = state.layers.some((layer) => layer.solo);
+  const activeIndex = state.activeLayer || 0;
 
+  // Composed notes (arpeggios, the keyboard composer) are quiet dots under the
+  // ink, not a second score.
   for (let layerIndex = 0; layerIndex < state.layers.length; layerIndex += 1) {
     const layer = state.layers[layerIndex];
-    if (layer.muted) continue;
-    if (soloed && !layer.solo) continue;
+    if (layer.muted || (soloed && !layer.solo)) continue;
     const active = layerIndex === activeIndex;
-    const opacity = active ? 1 : 0.34;
-    for (const note of layer.notes) {
+    for (const note of layer.notes || []) {
       const x = xForTime(note.time);
       const y = yForMidi(note.midi);
       const info = instrumentInfo(state, note.instrument);
       const color = contrast
-        ? CONTRAST_COLORS[Math.max(0, INSTRUMENTS.findIndex((i) => i.id === note.instrument)) % CONTRAST_COLORS.length]
+        ? CONTRAST_COLORS[Math.max(0, INSTRUMENTS.findIndex((item) => item.id === note.instrument)) % CONTRAST_COLORS.length]
         : info.color;
-      const radius = (active ? 6.5 : 5) + note.velocity * 2.2;
-      ctx.globalAlpha = opacity;
+      const radius = (active ? 3.2 : 2.4) + (note.velocity || 0.7) * 1.2;
+      ctx.globalAlpha = active ? 0.72 : 0.28;
       if (state.shapes || state.a11y?.shapes) {
-        drawShape(ctx, info.shape, x, y, radius, color);
+        drawShape(ctx, info.shape, x, y, radius + 1, color);
       } else {
         ctx.fillStyle = color;
         ctx.beginPath();
         ctx.arc(x, y, radius, 0, Math.PI * 2);
         ctx.fill();
       }
-      if (state.names !== false && active) {
-        ctx.fillStyle = contrast ? "#ffe600" : dark ? "rgba(255,255,255,.88)" : "rgba(0,0,0,.72)";
-        ctx.font = noteFont;
-        ctx.textAlign = "center";
-        ctx.fillText(midiToName(note.midi), x, y - radius - 3);
-      }
-      const flash = flashes.get(note.id);
-      if (flash && flash > now) {
-        ctx.globalAlpha = 0.8;
-        ctx.strokeStyle = contrast ? "#fff" : "#fff";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(x, y, radius + 5, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-      ctx.globalAlpha = 1;
     }
   }
+  ctx.globalAlpha = 1;
 
+  // Ink.
+  for (let layerIndex = 0; layerIndex < state.layers.length; layerIndex += 1) {
+    const layer = state.layers[layerIndex];
+    if (layer.muted || (soloed && !layer.solo)) continue;
+    const active = layerIndex === activeIndex;
+    const alpha = active ? 1 : 0.26;
+    (layer.strokes || []).forEach((stroke, index) => {
+      if (!stroke.points || stroke.points.length < 1) return;
+      drawInk(
+        ctx,
+        stroke.points,
+        strokeColor(stroke.instrument),
+        width,
+        height,
+        alpha,
+        strokeSeed(stroke, index),
+        contrast
+      );
+    });
+  }
+
+  if (options.liveStroke && options.liveStroke.points?.length) {
+    drawInk(
+      ctx,
+      options.liveStroke.points,
+      strokeColor(options.liveStroke.instrument),
+      width,
+      height,
+      0.95,
+      Date.now() & 0xffff,
+      contrast
+    );
+  }
+
+  // The playhead: a thin line, and a dark dot wherever it crosses the ink.
   if (time != null && (options.playing || time > 0.001)) {
     const x = xForTime(time);
-    // A bead of light where the playhead crosses the ink, so a loop feels read
-    // rather than merely swept.
     if (options.playing) {
       const nx = clamp(time / loopBeats, 0, 1);
       for (let layerIndex = 0; layerIndex < state.layers.length; layerIndex += 1) {
@@ -390,52 +342,49 @@ export function drawScore(ctx, state, time, width, height, options = {}) {
         for (const stroke of layer.strokes || []) {
           const points = stroke.points;
           if (!points || points.length < 2) continue;
-          const color = strokeColor(stroke.instrument);
+          ctx.fillStyle = contrast ? "#ffe600" : dark ? "#fff" : "#1a1916";
+          ctx.globalAlpha = active ? 1 : 0.4;
+          let lastY = null;
           for (let i = 1; i < points.length; i += 1) {
             const a = points[i - 1];
             const b = points[i];
-            if (nx < Math.min(a.x, b.x) || nx > Math.max(a.x, b.x)) continue;
-            const span = b.x - a.x;
-            const t = Math.abs(span) < 0.000001 ? 0 : (nx - a.x) / span;
-            const py = pad.t + (a.y + (b.y - a.y) * t) * innerH;
-            ctx.save();
-            ctx.globalAlpha = active ? 0.95 : 0.42;
-            ctx.shadowColor = color;
-            ctx.shadowBlur = 14;
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.arc(x, py, active ? 4.2 : 3, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.restore();
+            if (b.brk) continue;
+            if ((a.x - nx) * (b.x - nx) > 0 || a.x === b.x) continue;
+            const t = (nx - a.x) / (b.x - a.x);
+            const py = (a.y + (b.y - a.y) * t) * height;
+            if (lastY === null || Math.abs(py - lastY) > 6) {
+              ctx.beginPath();
+              ctx.arc(x, py, 4.5, 0, Math.PI * 2);
+              ctx.fill();
+              lastY = py;
+            }
           }
         }
       }
+      ctx.globalAlpha = 1;
     }
-    ctx.strokeStyle = contrast ? "#ffe600" : "#e8402a";
-    ctx.lineWidth = 1.6;
+
+    ctx.strokeStyle = contrast ? "#ffe600" : dark ? "rgba(255,255,255,.75)" : "rgba(26,25,22,.7)";
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.moveTo(x, pad.t - 4);
-    ctx.lineTo(x, pad.t + innerH + 4);
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, height);
     ctx.stroke();
-    ctx.fillStyle = ctx.strokeStyle;
-    ctx.beginPath();
-    ctx.arc(x, pad.t - 4, 3, 0, Math.PI * 2);
-    ctx.fill();
   }
 
   if (options.cursor) {
     const x = xForTime(options.cursor.time);
     const y = yForMidi(options.cursor.midi);
-    ctx.strokeStyle = contrast ? "#fff" : "#e8402a";
-    ctx.lineWidth = 1.6;
+    ctx.strokeStyle = contrast ? "#fff" : "#1a1916";
+    ctx.lineWidth = 1.2;
     ctx.beginPath();
-    ctx.arc(x, y, 10, 0, Math.PI * 2);
+    ctx.arc(x, y, 9, 0, Math.PI * 2);
     ctx.stroke();
     ctx.beginPath();
-    ctx.moveTo(x - 14, y);
-    ctx.lineTo(x + 14, y);
-    ctx.moveTo(x, y - 14);
-    ctx.lineTo(x, y + 14);
+    ctx.moveTo(x - 13, y);
+    ctx.lineTo(x + 13, y);
+    ctx.moveTo(x, y - 13);
+    ctx.lineTo(x, y + 13);
     ctx.stroke();
   }
 
@@ -481,68 +430,43 @@ export class ScoreRenderer {
   }
 
   layout() {
-    const state = this.getState();
-    const notes = scaleNotes(state);
-    const width = this.width;
-    const height = this.height;
-    const pad = {
-      l: width < 560 ? 20 : 38,
-      r: 16,
-      t: 24,
-      b: width < 560 ? 20 : 30,
+    return {
+      state: this.getState(),
+      width: this.width,
+      height: this.height,
     };
-    const innerW = Math.max(20, width - pad.l - pad.r);
-    const innerH = Math.max(20, height - pad.t - pad.b);
-    return { state, notes, width, height, pad, innerW, innerH };
   }
 
   timeToX(time) {
-    const { state, pad, innerW } = this.layout();
-    const loopBeats = Math.max(1, (state.loopBars || 8) * 4);
-    return pad.l + (Math.max(0, Math.min(loopBeats, time)) / loopBeats) * innerW;
+    const state = this.getState();
+    const loopBeats = Math.max(1, (state.loopBars || 4) * 4);
+    return (clamp(time, 0, loopBeats) / loopBeats) * this.width;
   }
 
   xToTime(x) {
-    const { pad, innerW } = this.layout();
     const state = this.getState();
-    const loopBeats = Math.max(1, (state.loopBars || 8) * 4);
-    return Math.max(0, Math.min(loopBeats, ((x - pad.l) / innerW) * loopBeats));
+    const loopBeats = Math.max(1, (state.loopBars || 4) * 4);
+    return clamp((x / Math.max(1, this.width)) * loopBeats, 0, loopBeats);
   }
 
   normalizePoint(x, y) {
-    const { pad, innerW, innerH } = this.layout();
     return {
-      x: clamp((x - pad.l) / innerW, 0, 1),
-      y: clamp((y - pad.t) / innerH, 0, 1),
+      x: clamp(x / Math.max(1, this.width), 0, 1),
+      y: clamp(y / Math.max(1, this.height), 0, 1),
     };
   }
 
   midiToY(midi) {
-    const { notes, pad, innerH } = this.layout();
-    let index = 0;
-    let distance = Infinity;
-    for (let i = 0; i < notes.length; i += 1) {
-      const d = Math.abs(notes[i] - midi);
-      if (d < distance) {
-        distance = d;
-        index = i;
-      }
-    }
-    return pad.t + (1 - index / Math.max(1, notes.length - 1)) * innerH;
+    return this.height - ((midiRow(this.getState(), midi) + 0.5) / gridRows()) * this.height;
   }
 
   yToMidi(y) {
-    const { notes, pad, innerH } = this.layout();
-    const norm = 1 - (y - pad.t) / innerH;
-    const index = Math.round(Math.max(0, Math.min(1, norm)) * (notes.length - 1));
-    return notes[index];
+    const row = Math.round((1 - clamp(y / Math.max(1, this.height), 0, 1)) * (gridRows() - 1));
+    return rowMidi(this.getState(), row);
   }
 
   pitchAtY(y) {
-    const { state, pad, innerH } = this.layout();
-    const norm = clamp(1 - (y - pad.t) / innerH, 0, 1);
-    const base = 48 + (state.key || 0) + (state.octave || 0) * 12;
-    return Math.round(base + norm * 12 * Math.max(1, state.range || 2));
+    return this.yToMidi(y);
   }
 
   hitTest(x, y, radius = 14) {
@@ -564,7 +488,7 @@ export class ScoreRenderer {
   }
 
   hitTestStroke(x, y, radius = 14) {
-    const { state, pad, innerW, innerH } = this.layout();
+    const state = this.getState();
     const active = state.layers[state.activeLayer];
     if (!active || !active.strokes) return null;
     let best = null;
@@ -573,10 +497,10 @@ export class ScoreRenderer {
       const points = stroke.points;
       if (!points || points.length < 2) continue;
       for (let i = 1; i < points.length; i += 1) {
-        const ax = pad.l + points[i - 1].x * innerW;
-        const ay = pad.t + points[i - 1].y * innerH;
-        const bx = pad.l + points[i].x * innerW;
-        const by = pad.t + points[i].y * innerH;
+        const ax = points[i - 1].x * this.width;
+        const ay = points[i - 1].y * this.height;
+        const bx = points[i].x * this.width;
+        const by = points[i].y * this.height;
         const dx = bx - ax;
         const dy = by - ay;
         const lengthSq = dx * dx + dy * dy;

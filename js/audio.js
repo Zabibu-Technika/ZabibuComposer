@@ -9,8 +9,16 @@ import {
 } from "./config.js";
 import { strokeEvents } from "./lines.js";
 
+// The sound of the instrument is deliberately simple: one voice per phrase of
+// ink, one filter, one envelope, one echo. A phrase is a continuous run across
+// the paper, so the pitch steps on the grid without retriggering the note. The
+// page can hold a hundred notes, so every extra oscillator would turn into fog.
+// A gentle bus level keeps a single line and a full chord at the same loudness,
+// and a soft clip at the very end is the only colour the mix gets.
+
 let audioContext = null;
 let previewGraph = null;
+let liveVoice = null;
 
 export async function ensureContext() {
   if (!audioContext) {
@@ -26,42 +34,7 @@ export function getContext() {
   return audioContext;
 }
 
-function makeNoise(ctx, seconds = 0.5) {
-  if (!ctx.__zcNoise) {
-    const length = Math.max(1, Math.floor(ctx.sampleRate * seconds));
-    const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < length; i += 1) data[i] = Math.random() * 2 - 1;
-    ctx.__zcNoise = buffer;
-  }
-  return ctx.__zcNoise;
-}
-
-function makeImpulse(ctx, seconds = 3.2, decay = 2.5) {
-  const length = Math.floor(ctx.sampleRate * seconds);
-  const buffer = ctx.createBuffer(2, length, ctx.sampleRate);
-  const reflections = [0.011, 0.019, 0.031, 0.047, 0.071, 0.103];
-  for (let channel = 0; channel < 2; channel += 1) {
-    const data = buffer.getChannelData(channel);
-    let smooth = 0;
-    for (let i = 0; i < length; i += 1) {
-      const t = i / length;
-      // A darker, tape-like tail: one-pole smoothing removes the fizzy top.
-      smooth = smooth * 0.74 + (Math.random() * 2 - 1) * 0.26;
-      data[i] = smooth * Math.pow(1 - t, decay);
-    }
-    reflections.forEach((time, index) => {
-      const position = Math.floor(time * ctx.sampleRate * (1 + channel * 0.07));
-      if (position < length) data[position] += (index % 2 === 0 ? 0.42 : -0.3) * (1 - index / reflections.length);
-    });
-    let peak = 0;
-    for (let i = 0; i < length; i += 1) peak = Math.max(peak, Math.abs(data[i]));
-    if (peak > 0) for (let i = 0; i < length; i += 1) data[i] /= peak;
-  }
-  return buffer;
-}
-
-function softClipCurve(amount = 1.4) {
+function softClipCurve(amount = 1.15) {
   const size = 2048;
   const curve = new Float32Array(size);
   for (let i = 0; i < size; i += 1) {
@@ -71,490 +44,257 @@ function softClipCurve(amount = 1.4) {
   return curve;
 }
 
-function noiseBurst(ctx, out, when, { frequency = 2200, q = 1, amp = 0.07, duration = 0.035, type = "bandpass" } = {}) {
-  const source = ctx.createBufferSource();
-  source.buffer = makeNoise(ctx);
-  const filter = ctx.createBiquadFilter();
-  filter.type = type;
-  filter.frequency.value = frequency;
-  filter.Q.value = q;
-  const gain = ctx.createGain();
-  gain.gain.setValueAtTime(Math.max(0.0001, amp), when);
-  gain.gain.exponentialRampToValueAtTime(0.0001, when + duration);
-  source.connect(filter);
-  filter.connect(gain);
-  gain.connect(out);
-  source.start(when);
-  source.stop(when + duration + 0.02);
-}
-
-function envelope(param, when, {
-  attack = 0.005,
-  decay = 0.18,
-  sustain = 0.35,
-  release = 0.35,
-  duration = 0.5,
-  peak = 0.2,
-} = {}) {
-  const t0 = when;
-  const t1 = t0 + attack;
-  const t2 = t1 + decay;
-  const t3 = Math.max(t2, t0 + duration);
-  const t4 = t3 + release;
-  param.cancelScheduledValues(t0);
-  param.setValueAtTime(0.0001, t0);
-  param.linearRampToValueAtTime(Math.max(0.0001, peak), t1);
-  param.exponentialRampToValueAtTime(Math.max(0.0001, peak * sustain), t2);
-  param.setValueAtTime(Math.max(0.0001, peak * sustain), t3);
-  param.exponentialRampToValueAtTime(0.0001, t4);
-  return t4;
-}
-
-// Drawn lines slide: a run of ink carries a pitch ramp into the next run, so a
-// diagonal reads as a glissando and a flat line holds still.
-function glide(param, fromFreq, toMidi, when, duration, tune = 0, ratio = 1) {
-  if (toMidi == null) return;
-  const target = midiToFreq(toMidi, tune) * ratio;
-  if (!Number.isFinite(target) || Math.abs(target - fromFreq) < 0.5) return;
-  param.setValueAtTime(Math.max(8, fromFreq), when);
-  param.exponentialRampToValueAtTime(Math.max(8, target), when + Math.max(0.04, Math.min(duration, 4)));
-}
-
 export function buildGraph(ctx, state, destination = ctx.destination, options = {}) {
-  const master = ctx.createGain();
-  const eqLow = ctx.createBiquadFilter();
-  eqLow.type = "lowshelf";
-  eqLow.frequency.value = 140;
-  eqLow.gain.value = 1.1;
-
-  const eqMid = ctx.createBiquadFilter();
-  eqMid.type = "peaking";
-  eqMid.frequency.value = 1250;
-  eqMid.Q.value = 0.7;
-  eqMid.gain.value = -0.6;
-
-  const eqHigh = ctx.createBiquadFilter();
-  eqHigh.type = "highshelf";
-  eqHigh.frequency.value = 6200;
-  eqHigh.gain.value = 1.4;
-
-  const comp = ctx.createDynamicsCompressor();
-  comp.threshold.value = -20;
-  comp.knee.value = 20;
-  comp.ratio.value = 3.2;
-  comp.attack.value = 0.008;
-  comp.release.value = 0.26;
-
-  const warmth = ctx.createWaveShaper();
-  warmth.curve = softClipCurve(1.35);
-  warmth.oversample = "2x";
-
-  const limiter = ctx.createDynamicsCompressor();
-  limiter.threshold.value = -1.5;
-  limiter.knee.value = 0;
-  limiter.ratio.value = 20;
-  limiter.attack.value = 0.001;
-  limiter.release.value = 0.08;
-
-  master.gain.value = 0.86;
-  master.connect(eqLow);
-  eqLow.connect(eqMid);
-  eqMid.connect(eqHigh);
-  eqHigh.connect(comp);
-  comp.connect(warmth);
-  warmth.connect(limiter);
-  limiter.connect(destination);
-
   const bus = ctx.createGain();
-  bus.gain.value = 1;
-  bus.connect(master);
+  bus.gain.value = 0.95;
 
-  const reverb = options.reverbSeconds === 0 ? ctx.createGain() : ctx.createConvolver();
-  if (options.reverbSeconds === 0) reverb.gain.value = 0;
-  else reverb.buffer = makeImpulse(ctx, options.reverbSeconds ?? 3.2, 2.2);
-  const reverbGain = ctx.createGain();
-  reverbGain.gain.value = 0.27;
-  reverb.connect(reverbGain);
-  reverbGain.connect(bus);
+  const preMaster = ctx.createGain();
+  preMaster.gain.value = options.masterGain ?? 0.9;
 
-  const delay = ctx.createDelay(2);
-  delay.delayTime.value = (60 / Math.max(40, state.bpm || 110)) * 0.75;
+  const soft = ctx.createWaveShaper();
+  soft.curve = softClipCurve(options.drive ?? 1.1);
+  soft.oversample = "2x";
+
+  // A last, very gentle filter: removes rumble and takes the glass off the top
+  // so dense drawings stay warm instead of fizzy.
+  const air = ctx.createBiquadFilter();
+  air.type = "lowpass";
+  air.frequency.value = options.air ?? 11500;
+  air.Q.value = 0.4;
+  const floor = ctx.createBiquadFilter();
+  floor.type = "highpass";
+  floor.frequency.value = 32;
+
+  const delay = ctx.createDelay(1.5);
+  delay.delayTime.value = options.delaySeconds ?? 0.28;
   const feedback = ctx.createGain();
-  feedback.gain.value = 0.22;
-  delay.connect(feedback);
+  feedback.gain.value = options.feedback ?? 0.26;
+  const damp = ctx.createBiquadFilter();
+  damp.type = "lowpass";
+  damp.frequency.value = 2300;
+  const clean = ctx.createBiquadFilter();
+  clean.type = "highpass";
+  clean.frequency.value = 210;
+  const wet = ctx.createGain();
+  wet.gain.value = options.wet ?? 0.16;
+
+  bus.connect(preMaster);
+  bus.connect(delay);
+  delay.connect(damp);
+  damp.connect(feedback);
   feedback.connect(delay);
+  delay.connect(clean);
+  clean.connect(wet);
+  wet.connect(preMaster);
 
-  const delayFilter = ctx.createBiquadFilter();
-  delayFilter.type = "lowpass";
-  delayFilter.frequency.value = 2600;
-  const delayGain = ctx.createGain();
-  delayGain.gain.value = 0.13;
-  delay.connect(delayFilter);
-  delayFilter.connect(delayGain);
-  delayGain.connect(bus);
+  preMaster.connect(air);
+  air.connect(floor);
+  floor.connect(soft);
+  soft.connect(destination);
 
-  return { master, warmth, bus, reverb, reverbGain, delay, feedback, delayFilter, delayGain, comp, limiter };
+  return { bus, preMaster, air, floor, soft, delay, feedback, damp, clean, wet };
 }
 
-function scheduleKeys(ctx, out, note, when, amp) {
-  const freq = midiToFreq(note.midi, note.tune);
-  const filter = ctx.createBiquadFilter();
-  filter.type = "lowpass";
-  filter.Q.value = 0.8;
-  filter.frequency.setValueAtTime(Math.min(7600, freq * 9), when);
-  filter.frequency.exponentialRampToValueAtTime(Math.max(650, freq * 2.4), when + 0.55);
+// ---------- voice design ----------
 
-  const body = ctx.createOscillator();
-  body.type = "triangle";
-  body.frequency.value = freq;
-  body.connect(filter);
-
-  const tine = ctx.createOscillator();
-  tine.type = "sine";
-  tine.frequency.value = freq * 2.004;
-  const tineGain = ctx.createGain();
-  tineGain.gain.value = 0.2;
-  tine.connect(tineGain);
-  tineGain.connect(filter);
-
-  const warmth = ctx.createOscillator();
-  warmth.type = "sawtooth";
-  warmth.frequency.value = freq;
-  warmth.detune.value = -6;
-  const warmthGain = ctx.createGain();
-  warmthGain.gain.value = 0.1;
-  warmth.connect(warmthGain);
-  warmthGain.connect(filter);
-
-  const sub = ctx.createOscillator();
-  sub.type = "sine";
-  sub.frequency.value = freq / 2;
-  const subGain = ctx.createGain();
-  subGain.gain.value = 0.14;
-  sub.connect(subGain);
-  subGain.connect(filter);
-
-  glide(body.frequency, freq, note.pitchTo, when, note.duration, note.tune);
-  glide(tine.frequency, freq * 2.004, note.pitchTo, when, note.duration, note.tune, 2.004);
-  glide(warmth.frequency, freq, note.pitchTo, when, note.duration, note.tune);
-  glide(sub.frequency, freq / 2, note.pitchTo, when, note.duration, note.tune, 0.5);
-
-  filter.connect(out);
-  envelope(out.gain, when, { attack: 0.004, decay: 0.3, sustain: 0.34, release: 0.55, duration: note.duration, peak: amp });
-  noiseBurst(ctx, out, when, { frequency: 2900, q: 0.9, amp: amp * 0.16, duration: 0.02 });
-  for (const osc of [body, tine, warmth, sub]) {
-    osc.start(when);
-    osc.stop(when + note.duration + 0.7);
-  }
-}
-
-function schedulePluck(ctx, out, note, when, amp) {
-  const freq = midiToFreq(note.midi, note.tune);
-  const filter = ctx.createBiquadFilter();
-  filter.type = "lowpass";
-  filter.Q.value = 3.4;
-  filter.frequency.setValueAtTime(Math.min(9600, freq * 14), when);
-  filter.frequency.exponentialRampToValueAtTime(Math.max(380, freq * 1.9), when + 0.26);
-
-  [-5, 5].forEach((cents, index) => {
-    const osc = ctx.createOscillator();
-    osc.type = "sawtooth";
-    osc.frequency.value = freq;
-    osc.detune.value = cents;
-    glide(osc.frequency, freq, note.pitchTo, when, note.duration, note.tune);
-    const gain = ctx.createGain();
-    gain.gain.value = index === 0 ? 0.82 : 0.5;
-    osc.connect(gain);
-    gain.connect(filter);
-    osc.start(when);
-    osc.stop(when + note.duration + 0.4);
-  });
-
-  const pick = ctx.createOscillator();
-  pick.type = "triangle";
-  pick.frequency.value = freq * 2.006;
-  glide(pick.frequency, freq * 2.006, note.pitchTo, when, note.duration, note.tune, 2.006);
-  const pickGain = ctx.createGain();
-  pickGain.gain.value = 0.12;
-  pick.connect(pickGain);
-  pickGain.connect(filter);
-  pick.start(when);
-  pick.stop(when + 0.3);
-
-  filter.connect(out);
-  envelope(out.gain, when, { attack: 0.002, decay: 0.18, sustain: 0.1, release: 0.26, duration: note.duration, peak: amp });
-  noiseBurst(ctx, out, when, { frequency: 3400, q: 0.7, amp: amp * 0.22, duration: 0.018 });
-}
-
-function scheduleBell(ctx, out, note, when, amp) {
-  const freq = midiToFreq(note.midi, note.tune);
-  const carrier = ctx.createOscillator();
-  carrier.type = "sine";
-  carrier.frequency.value = freq;
-  const mod = ctx.createOscillator();
-  mod.type = "sine";
-  mod.frequency.value = freq * 3.51;
-  const modGain = ctx.createGain();
-  modGain.gain.setValueAtTime(freq * 1.1, when);
-  modGain.gain.exponentialRampToValueAtTime(1, when + 0.7);
-  mod.connect(modGain);
-  modGain.connect(carrier.frequency);
-  const shimmer = ctx.createOscillator();
-  shimmer.type = "sine";
-  shimmer.frequency.value = freq * 2.01;
-  const shimmerGain = ctx.createGain();
-  shimmerGain.gain.value = 0.18;
-  carrier.connect(out);
-  shimmer.connect(shimmerGain);
-  shimmerGain.connect(out);
-  glide(carrier.frequency, freq, note.pitchTo, when, note.duration, note.tune);
-  glide(shimmer.frequency, freq * 2.01, note.pitchTo, when, note.duration, note.tune, 2.01);
-  glide(mod.frequency, freq * 3.51, note.pitchTo, when, note.duration, note.tune, 3.51);
-  envelope(out.gain, when, { attack: 0.004, decay: 0.55, sustain: 0.18, release: 1.8, duration: Math.max(note.duration, 0.6), peak: amp });
-  carrier.start(when);
-  mod.start(when);
-  shimmer.start(when);
-  const stop = when + Math.max(note.duration, 0.6) + 2;
-  carrier.stop(stop);
-  mod.stop(stop);
-  shimmer.stop(stop);
-}
-
-function scheduleMarimba(ctx, out, note, when, amp) {
-  const freq = midiToFreq(note.midi, note.tune);
-  const body = ctx.createOscillator();
-  body.type = "sine";
-  body.frequency.value = freq;
-  body.connect(out);
-
-  const edge = ctx.createOscillator();
-  edge.type = "triangle";
-  edge.frequency.value = freq * 3.95;
-  const edgeGain = ctx.createGain();
-  edgeGain.gain.value = 0.14;
-  edge.connect(edgeGain);
-  edgeGain.connect(out);
-
-  const wood = ctx.createOscillator();
-  wood.type = "sine";
-  wood.frequency.value = freq * 9.2;
-  const woodGain = ctx.createGain();
-  woodGain.gain.value = 0.05;
-  wood.connect(woodGain);
-  woodGain.connect(out);
-
-  glide(body.frequency, freq, note.pitchTo, when, note.duration, note.tune);
-  glide(edge.frequency, freq * 3.95, note.pitchTo, when, note.duration, note.tune, 3.95);
-  glide(wood.frequency, freq * 9.2, note.pitchTo, when, note.duration, note.tune, 9.2);
-
-  envelope(out.gain, when, { attack: 0.002, decay: 0.2, sustain: 0.06, release: 0.36, duration: Math.max(note.duration, 0.2), peak: amp });
-  noiseBurst(ctx, out, when, { frequency: 1700, q: 1.2, amp: amp * 0.18, duration: 0.022 });
-  for (const osc of [body, edge, wood]) {
-    osc.start(when);
-    osc.stop(when + Math.max(note.duration, 0.2) + 0.5);
-  }
-}
-
-function scheduleFlute(ctx, out, note, when, amp) {
-  const freq = midiToFreq(note.midi, note.tune);
-  const osc = ctx.createOscillator();
-  osc.type = "sine";
-  osc.frequency.value = freq;
-  glide(osc.frequency, freq, note.pitchTo, when, note.duration, note.tune);
-  const lfo = ctx.createOscillator();
-  lfo.type = "sine";
-  lfo.frequency.value = 5.1;
-  const lfoGain = ctx.createGain();
-  lfoGain.gain.value = 2.8;
-  lfo.connect(lfoGain);
-  lfoGain.connect(osc.frequency);
-  const noise = ctx.createBufferSource();
-  noise.buffer = makeNoise(ctx);
-  const noiseFilter = ctx.createBiquadFilter();
-  noiseFilter.type = "bandpass";
-  noiseFilter.frequency.value = Math.min(6000, freq * 2.1);
-  noiseFilter.Q.value = 1.1;
-  const noiseGain = ctx.createGain();
-  noiseGain.gain.value = 0.055;
-  noise.connect(noiseFilter);
-  noiseFilter.connect(noiseGain);
-  noiseGain.connect(out);
-  osc.connect(out);
-  envelope(out.gain, when, { attack: 0.08, decay: 0.12, sustain: 0.72, release: 0.35, duration: note.duration, peak: amp });
-  osc.start(when);
-  lfo.start(when);
-  noise.start(when);
-  const stop = when + note.duration + 0.6;
-  osc.stop(stop);
-  lfo.stop(stop);
-  noise.stop(stop);
-}
-
-function scheduleStrings(ctx, out, note, when, amp) {
-  const freq = midiToFreq(note.midi, note.tune);
-  const filter = ctx.createBiquadFilter();
-  filter.type = "lowpass";
-  filter.frequency.value = Math.min(4200, freq * 5);
-  [-7, 0, 7].forEach((cents, i) => {
-    const osc = ctx.createOscillator();
-    osc.type = "sawtooth";
-    osc.frequency.value = freq;
-    osc.detune.value = cents;
-    const g = ctx.createGain();
-    g.gain.value = i === 1 ? 0.24 : 0.14;
-    osc.connect(g);
-    g.connect(filter);
-    glide(osc.frequency, freq, note.pitchTo, when, note.duration, note.tune);
-    osc.start(when);
-    osc.stop(when + note.duration + 0.9);
-  });
-  const octave = ctx.createOscillator();
-  octave.type = "triangle";
-  octave.frequency.value = freq / 2;
-  glide(octave.frequency, freq / 2, note.pitchTo, when, note.duration, note.tune, 0.5);
-  const octaveGain = ctx.createGain();
-  octaveGain.gain.value = 0.08;
-  octave.connect(octaveGain);
-  octaveGain.connect(filter);
-  octave.start(when);
-  octave.stop(when + note.duration + 0.9);
-  filter.connect(out);
-  envelope(out.gain, when, { attack: 0.12, decay: 0.18, sustain: 0.62, release: 0.7, duration: note.duration, peak: amp });
-}
-
-function scheduleChime(ctx, out, note, when, amp) {
-  const freq = midiToFreq(note.midi, note.tune);
-  [1, 2.01, 3.9, 5.2].forEach((ratio, i) => {
-    const osc = ctx.createOscillator();
-    osc.type = "sine";
-    osc.frequency.value = freq * ratio;
-    glide(osc.frequency, freq * ratio, note.pitchTo, when, note.duration, note.tune, ratio);
-    const g = ctx.createGain();
-    g.gain.value = [0.55, 0.2, 0.12, 0.06][i];
-    osc.connect(g);
-    g.connect(out);
-    osc.start(when);
-    osc.stop(when + note.duration + 2.6);
-  });
-  envelope(out.gain, when, { attack: 0.003, decay: 0.6, sustain: 0.12, release: 2.2, duration: Math.max(note.duration, 0.7), peak: amp });
-}
-
-function scheduleBass(ctx, out, note, when, amp) {
-  const freq = midiToFreq(note.midi, note.tune);
-  const filter = ctx.createBiquadFilter();
-  filter.type = "lowpass";
-  filter.Q.value = 1.1;
-  filter.frequency.setValueAtTime(1100, when);
-  filter.frequency.exponentialRampToValueAtTime(320, when + 0.18);
-
-  const osc = ctx.createOscillator();
-  osc.type = "sine";
-  osc.frequency.value = freq;
-  osc.connect(filter);
-
-  const sub = ctx.createOscillator();
-  sub.type = "triangle";
-  sub.frequency.value = freq / 2;
-  const subGain = ctx.createGain();
-  subGain.gain.value = 0.3;
-  sub.connect(subGain);
-  subGain.connect(filter);
-
-  const harmonic = ctx.createOscillator();
-  harmonic.type = "sine";
-  harmonic.frequency.value = freq * 2;
-  const harmonicGain = ctx.createGain();
-  harmonicGain.gain.value = 0.1;
-  harmonic.connect(harmonicGain);
-  harmonicGain.connect(filter);
-
-  glide(osc.frequency, freq, note.pitchTo, when, note.duration, note.tune);
-  glide(sub.frequency, freq / 2, note.pitchTo, when, note.duration, note.tune, 0.5);
-  glide(harmonic.frequency, freq * 2, note.pitchTo, when, note.duration, note.tune, 2);
-
-  filter.connect(out);
-  envelope(out.gain, when, { attack: 0.004, decay: 0.16, sustain: 0.5, release: 0.28, duration: note.duration, peak: amp * 1.15 });
-  noiseBurst(ctx, out, when, { frequency: 280, q: 0.8, amp: amp * 0.1, duration: 0.016, type: "lowpass" });
-  for (const voice of [osc, sub, harmonic]) {
-    voice.start(when);
-    voice.stop(when + note.duration + 0.45);
-  }
-}
-
-function scheduleEightBit(ctx, out, note, when, amp) {
-  const freq = midiToFreq(note.midi, note.tune);
-  const osc = ctx.createOscillator();
-  osc.type = "square";
-  osc.frequency.value = freq;
-  glide(osc.frequency, freq, note.pitchTo, when, note.duration, note.tune);
-  const filter = ctx.createBiquadFilter();
-  filter.type = "lowpass";
-  filter.frequency.value = Math.min(4800, freq * 7);
-  osc.connect(filter);
-  filter.connect(out);
-  envelope(out.gain, when, { attack: 0.002, decay: 0.08, sustain: 0.4, release: 0.12, duration: note.duration, peak: amp * 0.7 });
-  osc.start(when);
-  osc.stop(when + note.duration + 0.2);
-}
-
-const SYNTHS = {
-  keys: scheduleKeys,
-  pluck: schedulePluck,
-  bell: scheduleBell,
-  marimba: scheduleMarimba,
-  flute: scheduleFlute,
-  strings: scheduleStrings,
-  chime: scheduleChime,
-  bass: scheduleBass,
-  eightbit: scheduleEightBit,
+const WAVES = {
+  // Soft, round harmonics. A pure sine would be dull and a saw would be harsh;
+  // a little second and third harmonic is what makes the ink sing.
+  keys: [0, 1, 0.34, 0.12],
+  bell: [0, 1, 0.26, 0.09, 0.05],
+  marimba: [0, 1, 0.04, 0.02, 0.12],
+  chime: [0, 1, 0.18, 0.05, 0.1, 0.02, 0.03],
+  strings: [0, 1, 0, 0.1, 0, 0.035],
+  bass: [0, 1, 0.18, 0.03],
 };
+
+const waveCache = new WeakMap();
+
+function periodicWave(ctx, name) {
+  const list = WAVES[name];
+  if (!list) return null;
+  let byName = waveCache.get(ctx);
+  if (!byName) {
+    byName = new Map();
+    waveCache.set(ctx, byName);
+  }
+  if (byName.has(name)) return byName.get(name);
+  const real = new Float32Array(list.length);
+  const imag = new Float32Array(list.length);
+  list.forEach((value, index) => { imag[index] = value; });
+  const wave = ctx.createPeriodicWave(real, imag, { disableNormalization: false });
+  byName.set(name, wave);
+  return wave;
+}
+
+// How loud a pitch feels. Low notes are quieter than their meters suggest, so
+// the bass gets a lift and the very top is pulled back a hair.
+function loudness(freq) {
+  if (freq < 330) return Math.min(2.2, Math.pow(330 / Math.max(freq, 40), 0.45));
+  if (freq > 1400) return Math.pow(1400 / freq, 0.12);
+  return 1;
+}
+
+const VOICES = {
+  keys: { wave: "keys", cutoff: 3400, gain: 1.2, attack: 0.008, decay: 0.9, struck: true },
+  pluck: { wave: "triangle", cutoff: 1900, gain: 1.05, attack: 0.006, decay: 0.5, struck: true },
+  bell: { wave: "bell", cutoff: 3000, gain: 1.0, attack: 0.006, decay: 1.3, struck: true },
+  marimba: { wave: "marimba", cutoff: 2600, gain: 1.2, attack: 0.005, decay: 0.4, struck: true },
+  flute: { wave: "sine", cutoff: 2600, gain: 1.05, attack: 0.08, release: 0.22, vibrato: 5.1, struck: false },
+  strings: { wave: "strings", cutoff: 1800, gain: 1.1, attack: 0.14, release: 0.32, detune: 6, struck: false },
+  chime: { wave: "chime", cutoff: 3600, gain: 0.9, attack: 0.005, decay: 1.0, struck: true },
+  bass: { wave: "bass", cutoff: 1000, gain: 1.05, attack: 0.02, release: 0.18, struck: false },
+  eightbit: { wave: "square", cutoff: 850, gain: 0.55, attack: 0.02, release: 0.12, struck: false },
+};
+
+function voiceFor(instrument) {
+  return VOICES[instrument] || VOICES.keys;
+}
+
+function makeOscillator(ctx, voice, freq) {
+  const osc = ctx.createOscillator();
+  if (voice.wave === "triangle" || voice.wave === "square") {
+    osc.type = voice.wave;
+  } else {
+    const wave = periodicWave(ctx, voice.wave);
+    if (wave) osc.setPeriodicWave(wave);
+    else osc.type = "sine";
+  }
+  osc.frequency.value = freq;
+  return osc;
+}
 
 export function scheduleVoice(ctx, graph, note, when, state, options = {}) {
   const info = instrumentInfo(state, note.instrument);
+  const voice = voiceFor(note.instrument);
+  const freq = midiToFreq(note.midi, state.tune || note.tune || 0);
+  if (!Number.isFinite(freq) || freq < 12 || freq > 14000) return null;
+
+  const amp = (options.amp ?? 0.16) * voice.gain * loudness(freq) * (0.55 + (note.velocity ?? 0.8) * 0.55);
+  const peak = Math.max(0.0002, amp);
+
   const out = ctx.createGain();
+  out.gain.value = 0.0001;
+  const filter = ctx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.value = Math.min(voice.cutoff, 9000);
+  filter.Q.value = 0.6;
+
   const pan = ctx.createStereoPanner();
-  pan.pan.value = info.pan;
+  pan.pan.value = clamp(info.pan ?? 0, -0.5, 0.5);
+
+  filter.connect(out);
   out.connect(pan);
-  const sendReverb = ctx.createGain();
-  sendReverb.gain.value = info.reverb;
-  pan.connect(sendReverb);
-  sendReverb.connect(graph.reverb);
-  const sendDelay = ctx.createGain();
-  sendDelay.gain.value = info.delay;
-  pan.connect(sendDelay);
-  sendDelay.connect(graph.delay);
   pan.connect(graph.bus);
 
-  const amp = (options.amp ?? 0.22) * (0.55 + note.velocity * 0.55);
-  const synth = SYNTHS[note.instrument] || SYNTHS.keys;
-  synth(ctx, out, { ...note, tune: state.tune || 0 }, when, amp);
+  const oscillators = [];
+  const main = makeOscillator(ctx, voice, freq);
+  main.connect(filter);
+  oscillators.push(main);
+
+  if (voice.detune) {
+    const second = makeOscillator(ctx, voice, freq);
+    second.detune.value = voice.detune;
+    const secondGain = ctx.createGain();
+    secondGain.gain.value = 0.55;
+    second.connect(secondGain);
+    secondGain.connect(filter);
+    oscillators.push(second);
+  }
+
+  let lfo = null;
+  if (voice.vibrato) {
+    lfo = ctx.createOscillator();
+    lfo.type = "sine";
+    lfo.frequency.value = voice.vibrato;
+    const depth = ctx.createGain();
+    depth.gain.value = Math.max(0.6, freq * 0.0035);
+    lfo.connect(depth);
+    depth.connect(main.frequency);
+    lfo.start(when);
+    lfo.stop(when + 30);
+  }
+
+  const duration = Math.max(0.05, Number(note.duration) || 0.25);
+  let stopAt;
+  if (voice.struck) {
+    const end = when + voice.attack;
+    const tail = clamp(voice.decay * 1.2, 0.3, 1.5);
+    out.gain.cancelScheduledValues(when);
+    out.gain.setValueAtTime(0.0001, when);
+    out.gain.linearRampToValueAtTime(peak, end);
+    out.gain.exponentialRampToValueAtTime(0.0001, end + tail);
+    stopAt = end + tail + 0.05;
+  } else {
+    const end = Math.max(when + voice.attack + 0.02, when + duration);
+    const release = voice.release ?? 0.2;
+    out.gain.cancelScheduledValues(when);
+    out.gain.setValueAtTime(0.0001, when);
+    out.gain.linearRampToValueAtTime(peak, when + voice.attack);
+    out.gain.setValueAtTime(peak, Math.max(when + voice.attack, end - 0.005));
+    out.gain.exponentialRampToValueAtTime(0.0001, end + release);
+    stopAt = end + release + 0.05;
+  }
+
+  oscillators.forEach((osc) => {
+    osc.start(when);
+    osc.stop(stopAt);
+  });
+  if (lfo) {
+    try { lfo.stop(stopAt); } catch (err) { /* already stopped */ }
+  }
   return out;
 }
 
-export function scheduleClick(ctx, graph, when, accent = false) {
-  const osc = ctx.createOscillator();
-  osc.type = "sine";
-  osc.frequency.value = accent ? 1500 : 1100;
-  const gain = ctx.createGain();
-  gain.gain.setValueAtTime(0.0001, when);
-  gain.gain.linearRampToValueAtTime(accent ? 0.16 : 0.09, when + 0.002);
-  gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.05);
-  osc.connect(gain);
-  gain.connect(graph.bus);
-  osc.start(when);
-  osc.stop(when + 0.08);
+// ---------- events ----------
+
+export function collectEvents(state) {
+  const layers = state.layers || [];
+  const soloed = layers.some((layer) => layer.solo);
+  const events = [];
+  for (const layer of layers) {
+    if (layer.muted || (soloed && !layer.solo)) continue;
+    for (const note of layer.notes || []) {
+      events.push({
+        time: note.time,
+        midi: note.midi,
+        duration: note.duration,
+        velocity: note.velocity,
+        instrument: note.instrument || state.instrument,
+      });
+    }
+    for (const stroke of layer.strokes || []) {
+      for (const event of strokeEvents(stroke, state)) {
+        events.push({
+          ...event,
+          instrument: stroke.instrument || state.instrument,
+          source: `${state.layers.indexOf(layer)}:${stroke.id ?? "s"}`,
+        });
+      }
+    }
+  }
+  events.sort((a, b) => a.time - b.time || a.midi - b.midi);
+  return events;
 }
 
-export async function previewNote(midi, instrument, options = {}) {
-  const ctx = await ensureContext();
-  if (!previewGraph) previewGraph = buildGraph(ctx, { bpm: 110 });
-  const when = ctx.currentTime + 0.02;
-  scheduleVoice(ctx, previewGraph, {
-    midi,
-    instrument: instrument || "keys",
-    velocity: options.velocity ?? 0.8,
-    duration: options.duration ?? 0.5,
-  }, when, { tune: options.tune || 0 });
+// A bus level that follows how many notes overlap. One line is allowed to sing
+// out; a thick chord is tucked back in, so nothing ever clips or shouts.
+export function busLevelFor(events) {
+  if (!events.length) return 1;
+  const loopBeats = events.reduce((max, event) => Math.max(max, event.time + event.duration), 0);
+  let samples = 0;
+  let sum = 0;
+  for (let t = 0; t < loopBeats; t += 0.25) {
+    let count = 0;
+    for (const event of events) {
+      const tail = Math.max(event.duration, 0.45);
+      if (event.time <= t && t < event.time + tail) count += 1;
+    }
+    sum += count;
+    samples += 1;
+  }
+  const average = samples ? sum / samples : 1;
+  return clamp(1.12 / Math.sqrt(Math.max(1, average * 0.9)), 0.3, 1.2);
 }
 
 export function swingOffsetBeats(time, state) {
@@ -564,70 +304,165 @@ export function swingOffsetBeats(time, state) {
   return 0;
 }
 
-function playableLayers(state) {
-  const layers = state.layers || [];
-  const soloed = layers.some((layer) => layer.solo);
-  return layers.filter((layer) => !layer.muted && (!soloed || layer.solo));
+export function scheduleClick(ctx, graph, when, accent = false) {
+  const osc = ctx.createOscillator();
+  osc.type = "sine";
+  osc.frequency.value = accent ? 1600 : 1200;
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.0001, when);
+  gain.gain.linearRampToValueAtTime(accent ? 0.12 : 0.07, when + 0.002);
+  gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.045);
+  osc.connect(gain);
+  gain.connect(graph.bus);
+  osc.start(when);
+  osc.stop(when + 0.07);
+}
+
+function playableEvents(events) {
+  return events;
+}
+
+// Group the note runs of one lane into phrases: a phrase is a continuous line,
+// so it is played by a single voice that steps through the pitches. This is the
+// difference between a melody and a pile of separate notes.
+export function buildPhrases(events) {
+  const byKey = new Map();
+  for (const event of events) {
+    if (event.phrase == null) continue;
+    const key = `${event.source ?? ""}|${event.lane ?? 0}|${event.phrase}`;
+    let list = byKey.get(key);
+    if (!list) {
+      list = [];
+      byKey.set(key, list);
+    }
+    list.push(event);
+  }
+  const phrases = [];
+  for (const list of byKey.values()) {
+    list.sort((a, b) => a.time - b.time || a.midi - b.midi);
+    phrases.push(list);
+  }
+  phrases.sort((a, b) => a[0].time - b[0].time);
+  return phrases;
+}
+
+function schedulePhrase(ctx, graph, phrase, when, secondsPerBeat, state) {
+  const first = phrase[0];
+  const instrument = first.instrument || state.instrument;
+  const voice = voiceFor(instrument);
+  const info = instrumentInfo(state, instrument);
+  const freq = midiToFreq(first.midi, state.tune || 0);
+  if (!Number.isFinite(freq) || freq < 12 || freq > 14000) return null;
+
+  const last = phrase[phrase.length - 1];
+  const length = Math.max(0.08, (last.time + last.duration - first.time) * secondsPerBeat);
+  const peak = Math.max(0.0004, (0.16 * voice.gain * loudness(freq)) * (0.6 + (first.velocity ?? 0.8) * 0.5));
+
+  const out = ctx.createGain();
+  out.gain.value = 0.0001;
+  const filter = ctx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.value = Math.min(voice.cutoff, 9000);
+  filter.Q.value = 0.6;
+  const pan = ctx.createStereoPanner();
+  pan.pan.value = clamp(info.pan ?? 0, -0.5, 0.5);
+  filter.connect(out);
+  out.connect(pan);
+  pan.connect(graph.bus);
+
+  const oscs = [];
+  const main = makeOscillator(ctx, voice, freq);
+  main.connect(filter);
+  oscs.push(main);
+  if (voice.detune) {
+    const second = makeOscillator(ctx, voice, freq);
+    second.detune.value = voice.detune;
+    const secondGain = ctx.createGain();
+    secondGain.gain.value = 0.55;
+    second.connect(secondGain);
+    secondGain.connect(filter);
+    oscs.push(second);
+  }
+
+  const attack = Math.min(0.03, Math.max(0.006, voice.attack));
+  const attackEnd = when + attack;
+  const decayEnd = Math.min(when + length, attackEnd + Math.max(0.12, Math.min(0.85, voice.decay || 0.4)));
+  const releaseEnd = Math.max(decayEnd + 0.02, when + length + (voice.struck ? 0.14 : 0.24));
+
+  out.gain.setValueAtTime(0.0001, when);
+  out.gain.linearRampToValueAtTime(peak, attackEnd);
+  out.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak * (voice.struck ? 0.42 : 0.86)), decayEnd);
+  out.gain.setValueAtTime(Math.max(0.0002, peak * (voice.struck ? 0.42 : 0.86)), Math.max(decayEnd, releaseEnd - 0.12));
+  out.gain.exponentialRampToValueAtTime(0.0001, releaseEnd);
+
+  // Pitch steps, exactly on the grid, with the phase kept: no clicks.
+  oscs.forEach((osc) => osc.frequency.setValueAtTime(freq, when));
+  for (let i = 1; i < phrase.length; i += 1) {
+    const segment = phrase[i];
+    const at = Math.max(when, when + (segment.time - first.time) * secondsPerBeat);
+    const nextFreq = midiToFreq(segment.midi, state.tune || 0);
+    if (Number.isFinite(nextFreq) && nextFreq > 12 && nextFreq < 14000) {
+      oscs.forEach((osc) => osc.frequency.setValueAtTime(nextFreq, at));
+    }
+  }
+
+  const stopAt = releaseEnd + 0.05;
+  oscs.forEach((osc) => {
+    osc.start(when);
+    osc.stop(stopAt);
+  });
+  return out;
 }
 
 export async function renderMix(state, options = {}) {
   const sampleRate = options.sampleRate || 48000;
   const bpm = Math.max(40, state.bpm || 110);
-  const loopBeats = (options.bars || state.loopBars || 8) * 4;
+  const loopBeats = (options.bars || state.loopBars || 4) * 4;
   const secPerBeat = 60 / bpm;
   const seconds = options.seconds
     ? Number(options.seconds)
-    : beatsToSeconds(loopBeats, bpm) + (options.tail ?? 2.2);
+    : beatsToSeconds(loopBeats, bpm) + (options.tail ?? 2.6);
   const length = Math.max(1, Math.ceil(seconds * sampleRate));
   const ctx = new OfflineAudioContext(2, length, sampleRate);
-  const graph = buildGraph(ctx, state, ctx.destination, { reverbSeconds: options.reverbSeconds });
-  graph.delay.delayTime.value = secPerBeat * 0.75;
+  const graph = buildGraph(ctx, state, ctx.destination, options);
 
-  const layers = playableLayers(state);
-  const notes = layers.flatMap((layer) =>
-    layer.notes.map((note) => ({ ...note, layer: layer.id }))
-  );
-  const strokes = layers.flatMap((layer) =>
-    (layer.strokes || []).map((stroke) => ({ stroke, layer: layer.id }))
-  );
-
+  const events = playableEvents(collectEvents(state));
+  const phrases = buildPhrases(events);
+  const loose = events.filter((event) => event.phrase == null);
   const repeats = options.repeat ? Math.ceil(seconds / (loopBeats * secPerBeat)) + 1 : 1;
+  const busLevel = busLevelFor(events);
+  graph.bus.gain.value = busLevel;
+  graph.preMaster.gain.value = options.masterGain ?? 0.9;
 
   for (let repeat = 0; repeat < repeats; repeat += 1) {
-    for (const note of notes) {
-      const time = note.time + repeat * loopBeats;
-      const when = (time + swingOffsetBeats(note.time, state)) * secPerBeat;
-      if (when >= seconds - 0.02) continue;
-      if (when < 0) continue;
-      const duration = Math.min(
-        Number(note.duration) || 0.25,
-        Math.max(0.08, seconds - when)
-      );
-      scheduleVoice(ctx, graph, { ...note, duration }, when, state);
+    for (const phrase of phrases) {
+      const start = phrase[0].time + repeat * loopBeats;
+      const when = (start + swingOffsetBeats(phrase[0].time, state)) * secPerBeat;
+      if (when >= seconds - 0.02 || when < 0) continue;
+      schedulePhrase(ctx, graph, phrase, when, secPerBeat, state);
     }
-    for (const { stroke } of strokes) {
-      for (const event of strokeEvents(stroke, state)) {
-        const time = event.time + repeat * loopBeats;
-        const when = (time + swingOffsetBeats(event.time, state)) * secPerBeat;
-        if (when >= seconds - 0.02 || when < 0) continue;
-        const duration = Math.min(event.duration, Math.max(0.08, seconds - when));
-        scheduleVoice(ctx, graph, { ...event, duration, instrument: stroke.instrument }, when, state);
-      }
+    for (const event of loose) {
+      const time = event.time + repeat * loopBeats;
+      const when = (time + swingOffsetBeats(event.time, state)) * secPerBeat;
+      if (when >= seconds - 0.02 || when < 0) continue;
+      const duration = Math.min(
+        Number(event.duration) || 0.25,
+        Math.max(0.06, seconds - when)
+      );
+      scheduleVoice(ctx, graph, { ...event, duration }, when, state);
     }
   }
 
   const rendered = await ctx.startRendering();
   return normalizeBuffer(rendered, {
-    target: 0.92,
-    fadeIn: options.fadeIn ?? 0.01,
-    fadeOut: options.fadeOut ?? 1.2,
+    target: 0.9,
+    fadeIn: options.fadeIn ?? 0.008,
+    fadeOut: options.fadeOut ?? 1.4,
   });
 }
 
-// A ringtone is the loop played back-to-back. Rendering 30 s of dense notes at
-// once is the slowest possible path, so render one loop (plus its reverb tail)
-// and lay it down repeatedly instead. The tail of each pass overlaps the start
-// of the next one, which is exactly what the notes would have done anyway.
+// A ringtone is the loop played back-to-back. Render one loop and lay it down
+// repeatedly; the release tail of each pass carries into the next.
 export async function renderRingtone(state, seconds = 30) {
   const bpm = Math.max(40, state.bpm || 110);
   const loopSeconds = beatsToSeconds((state.loopBars || 4) * 4, bpm);
@@ -636,26 +471,26 @@ export async function renderRingtone(state, seconds = 30) {
     return renderMix(state, {
       seconds,
       repeat: true,
-      fadeIn: 0.6,
+      fadeIn: 0.5,
       fadeOut: 1.6,
       tail: 0,
     });
   }
 
-  const tail = 2.2;
+  const tail = 2.6;
   const loop = await renderMix(state, {
     bars: state.loopBars || 4,
     tail,
     fadeIn: 0,
     fadeOut: 0.02,
   });
-  return tileLoop(loop, loopSeconds, seconds, { fadeIn: 0.6, fadeOut: 1.6 });
+  return tileLoop(loop, loopSeconds, seconds, { fadeIn: 0.5, fadeOut: 1.6 });
 }
 
 function tileLoop(loop, loopSeconds, seconds, options = {}) {
   const sampleRate = loop.sampleRate;
   const loopLength = Math.max(1, Math.min(loop.length, Math.round(loopSeconds * sampleRate)));
-  const overlap = Math.max(0, Math.min(loop.length - loopLength, Math.round(1.5 * sampleRate)));
+  const overlap = Math.max(0, Math.min(loop.length - loopLength, Math.round(1.8 * sampleRate)));
   const total = Math.round(seconds * sampleRate);
   const out = new AudioBuffer({ length: total, numberOfChannels: loop.numberOfChannels, sampleRate });
 
@@ -665,25 +500,22 @@ function tileLoop(loop, loopSeconds, seconds, options = {}) {
     for (let offset = 0; offset < total; offset += loopLength) {
       const copy = Math.min(loopLength, total - offset);
       target.set(source.subarray(0, copy), offset);
-      // Carry the reverb/release tail into the next repetition.
       const tailStart = loopLength;
-      const tailCopy = Math.min(loop.length - tailStart, total - offset - loopLength);
-      if (tailCopy > 0) {
-        for (let i = 0; i < tailCopy; i += 1) target[offset + loopLength + i] += source[tailStart + i];
-      }
+      const tailCopy = Math.min(overlap, total - offset - loopLength);
+      for (let i = 0; i < tailCopy; i += 1) target[offset + loopLength + i] += source[tailStart + i];
     }
   }
 
   return normalizeBuffer(out, {
-    target: 0.92,
-    fadeIn: options.fadeIn ?? 0.6,
+    target: 0.9,
+    fadeIn: options.fadeIn ?? 0.5,
     fadeOut: options.fadeOut ?? 1.6,
   });
 }
 
 export function normalizeBuffer(buffer, options = {}) {
-  const target = options.target ?? 0.92;
-  const fadeIn = options.fadeIn ?? 0.01;
+  const target = options.target ?? 0.9;
+  const fadeIn = options.fadeIn ?? 0.008;
   const fadeOut = options.fadeOut ?? 1.2;
   let peak = 0;
   for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
@@ -710,92 +542,218 @@ export function normalizeBuffer(buffer, options = {}) {
   return buffer;
 }
 
+// ---------- live drawing voice ----------
+
+export async function startLive(instrument, midi) {
+  const ctx = await ensureContext();
+  if (!previewGraph) previewGraph = buildGraph(ctx, { bpm: 120 });
+  if (liveVoice) stopLive();
+  const voice = voiceFor(instrument);
+  const freq = midiToFreq(midi);
+  const osc = makeOscillator(ctx, voice, freq);
+  const filter = ctx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.value = Math.min(voice.cutoff, 5200);
+  filter.Q.value = 0.7;
+  const gain = ctx.createGain();
+  gain.gain.value = 0.0001;
+  osc.connect(filter);
+  filter.connect(gain);
+  gain.connect(previewGraph.bus);
+
+  // One gentle tone follows the pen. It glides between rows instead of
+  // restriking, so drawing sounds like a voice, not a machine gun.
+  const now = ctx.currentTime;
+  const peak = Math.min(0.17, 0.1 * voice.gain * loudness(freq));
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.linearRampToValueAtTime(peak, now + 0.035);
+  osc.start(now);
+
+  liveVoice = { ctx, osc, gain, filter, voice, midi, peak, startedAt: now };
+  return liveVoice;
+}
+
+export function setLiveMidi(midi) {
+  if (!liveVoice) return;
+  const { ctx, osc, gain, voice, peak } = liveVoice;
+  if (midi === liveVoice.midi) return;
+  liveVoice.midi = midi;
+  const freq = midiToFreq(midi);
+  const now = ctx.currentTime;
+  osc.frequency.setTargetAtTime(freq, now, 0.02);
+  const nextPeak = Math.min(0.17, 0.1 * voice.gain * loudness(freq));
+  if (Math.abs(nextPeak - peak) > 0.002) {
+    gain.gain.setTargetAtTime(nextPeak, now, 0.06);
+    liveVoice.peak = nextPeak;
+  }
+}
+
+export function stopLive() {
+  if (!liveVoice) return;
+  const { ctx, osc, gain } = liveVoice;
+  const now = ctx.currentTime;
+  try {
+    gain.gain.cancelScheduledValues(now);
+    gain.gain.setValueAtTime(Math.max(0.0001, gain.gain.value), now);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
+    osc.stop(now + 0.16);
+  } catch (err) {
+    /* voice already ended */
+  }
+  liveVoice = null;
+}
+
+export async function previewNote(midi, instrument, options = {}) {
+  const ctx = await ensureContext();
+  if (!previewGraph) previewGraph = buildGraph(ctx, { bpm: 120 });
+  const when = ctx.currentTime + 0.02;
+  scheduleVoice(ctx, previewGraph, {
+    midi,
+    instrument: instrument || "keys",
+    velocity: options.velocity ?? 0.75,
+    duration: options.duration ?? 0.45,
+  }, when, { tune: options.tune || 0 });
+}
+
+// ---------- transport ----------
+
 export class Transport {
   constructor(getState, callbacks = {}) {
     this.getState = getState;
     this.callbacks = callbacks;
     this.ctx = null;
     this.graph = null;
+    this.events = [];
+    this.phrases = [];
+    this.loose = [];
+    this.pending = null;
     this.timer = 0;
     this.playing = false;
-    this.startTime = 0;
-    this.nextTime = 0;
-    this.beat = 0;
-    this.loopLength = 0;
+    this.startAt = 0;
+    this.loopIndex = 0;
+    this.phraseIndex = 0;
+    this.looseIndex = 0;
+    this.loopBeats = 0;
+    this.secPerBeat = 0;
+    this.latency = 0;
+    this.stopAt = 0;
+    this.clickBeat = 0;
+    this.finishing = false;
   }
 
-  async play() {
+  async play(startBeat = 0) {
     if (this.playing) return;
     this.ctx = await ensureContext();
     const state = this.getState();
     this.graph = buildGraph(this.ctx, state);
-    this.graph.delay.delayTime.value = (60 / Math.max(40, state.bpm || 110)) * 0.75;
-    this.startTime = this.ctx.currentTime + 0.08;
-    this.nextTime = this.startTime;
-    this.beat = 0;
-    this.loopLength = (state.loopBars || 8) * 4;
+    this.events = collectEvents(state);
+    this.phrases = buildPhrases(this.events);
+    this.loose = this.events.filter((event) => event.phrase == null);
+    this.graph.bus.gain.value = busLevelFor(this.events);
+    this.secPerBeat = 60 / Math.max(40, state.bpm || 110);
+    this.loopBeats = (state.loopBars || 4) * 4;
+    this.startAt = this.ctx.currentTime + 0.12 - Math.max(0, Math.min(startBeat, this.loopBeats - 0.01)) * this.secPerBeat;
+    this.loopIndex = 0;
+    this.phraseIndex = 0;
+    this.looseIndex = 0;
+    this.clickBeat = 0;
+    this.stopAt = 0;
+    this.finishing = false;
+    this.pending = null;
+    this.latency = (this.ctx.baseLatency || 0) + (this.ctx.outputLatency || 0);
     this.playing = true;
     this.timer = window.setInterval(() => this.tick(), 25);
     this.tick();
     this.callbacks.onPlay?.();
   }
 
+  // Edits arrive mid-loop. Rather than doubling notes already scheduled, the
+  // new take is queued and lands on the next downbeat.
+  refresh() {
+    if (!this.playing) return;
+    const events = collectEvents(this.getState());
+    this.pending = {
+      events,
+      phrases: buildPhrases(events),
+      loose: events.filter((event) => event.phrase == null),
+    };
+  }
+
+  applyPending() {
+    if (!this.pending) return;
+    this.events = this.pending.events;
+    this.phrases = this.pending.phrases;
+    this.loose = this.pending.loose;
+    this.pending = null;
+    this.graph?.bus.gain.setTargetAtTime(busLevelFor(this.events), this.ctx.currentTime, 0.15);
+  }
+
   tick() {
     if (!this.playing) return;
     const state = this.getState();
-    const step = stepBeats(state);
-    const secPerBeat = 60 / Math.max(40, state.bpm || 110);
-    const lookahead = this.ctx.currentTime + 0.14;
+    const now = this.ctx.currentTime;
+    const lookahead = now + 0.22;
+    const loopSeconds = this.loopBeats * this.secPerBeat;
 
-    while (this.nextTime < lookahead) {
-      const beat = this.beat;
-      const when = this.nextTime;
-      this.scheduleStep(beat, when, state, step, secPerBeat);
-      this.nextTime += step * secPerBeat;
-      this.beat += step;
-      if (this.beat >= this.loopLength - 0.0001) {
+    if (this.stopAt && now >= this.stopAt) {
+      this.stop();
+      return;
+    }
+    if (this.finishing) return;
+
+    const loopStart = this.startAt + this.loopIndex * loopSeconds;
+
+    let guard = 0;
+    while (guard < 1200 && this.phraseIndex < this.phrases.length) {
+      guard += 1;
+      const phrase = this.phrases[this.phraseIndex];
+      const when = loopStart
+        + (phrase[0].time + swingOffsetBeats(phrase[0].time, state)) * this.secPerBeat;
+      if (when > lookahead) break;
+      if (when >= now - 0.08) {
+        schedulePhrase(this.ctx, this.graph, phrase, when, this.secPerBeat, state);
+        this.callbacks.onNote?.(phrase[phrase.length - 1], when);
+      }
+      this.phraseIndex += 1;
+    }
+
+    while (guard < 1600 && this.looseIndex < this.loose.length) {
+      guard += 1;
+      const event = this.loose[this.looseIndex];
+      const when = loopStart
+        + (event.time + swingOffsetBeats(event.time, state)) * this.secPerBeat;
+      if (when > lookahead) break;
+      if (when >= now - 0.08) {
+        scheduleVoice(this.ctx, this.graph, event, when, state);
+        this.callbacks.onNote?.(event, when);
+      }
+      this.looseIndex += 1;
+    }
+
+    if (this.phraseIndex >= this.phrases.length && this.looseIndex >= this.loose.length) {
+      if (loopStart + loopSeconds <= lookahead) {
         if (!state.loop) {
-          const stopAt = this.nextTime + 0.4;
-          window.setTimeout(() => this.stop(), Math.max(0, (stopAt - this.ctx.currentTime) * 1000));
-          this.beat = this.loopLength;
-          break;
+          this.stopAt = this.startAt + (this.loopIndex + 1) * loopSeconds + 0.6;
+          this.finishing = true;
+        } else {
+          this.loopIndex += 1;
+          this.phraseIndex = 0;
+          this.looseIndex = 0;
+          this.applyPending();
+          this.callbacks.onLoop?.();
         }
-        this.beat = 0;
-        this.callbacks.onLoop?.();
       }
     }
-  }
 
-  scheduleStep(beat, when, state, step, secPerBeat) {
-    const layers = state.layers || [];
-    const soloed = layers.some((layer) => layer.solo);
-    for (let layerIndex = 0; layerIndex < layers.length; layerIndex += 1) {
-      const layer = layers[layerIndex];
-      if (layer.muted || (soloed && !layer.solo)) continue;
-      for (const note of layer.notes) {
-        if (note.time >= beat - 0.0001 && note.time < beat + step - 0.0001) {
-          const swing = swingOffsetBeats(note.time, state) * secPerBeat;
-          scheduleVoice(this.ctx, this.graph, note, when + swing, state);
-          this.callbacks.onNote?.(note, when + swing);
-        }
-      }
-      // Drawn lines play as lines: each run of equal pitch in the ink becomes
-      // one voice, so a curve glides and a vertical stroke strums.
-      for (const stroke of layer.strokes || []) {
-        for (const event of strokeEvents(stroke, state)) {
-          if (event.time >= beat - 0.0001 && event.time < beat + step - 0.0001) {
-            const swing = swingOffsetBeats(event.time, state) * secPerBeat;
-            const at = when + Math.max(0, event.time - beat) * secPerBeat + swing;
-            scheduleVoice(this.ctx, this.graph, { ...event, instrument: stroke.instrument }, at, state);
-            this.callbacks.onNote?.({ ...event, instrument: stroke.instrument }, at);
-          }
-        }
-      }
-    }
     if (state.metronome) {
-      const rounded = Math.round(beat);
-      if (Math.abs(beat - rounded) < 0.001) {
-        scheduleClick(this.ctx, this.graph, when, rounded % 4 === 0);
+      let guardClicks = 0;
+      while (guardClicks < 64 && this.startAt + this.clickBeat * this.secPerBeat <= lookahead) {
+        guardClicks += 1;
+        const when = this.startAt + this.clickBeat * this.secPerBeat;
+        if (when >= now - 0.02) {
+          scheduleClick(this.ctx, this.graph, when, this.clickBeat % 4 === 0);
+        }
+        this.clickBeat += 1;
       }
     }
   }
@@ -807,12 +765,12 @@ export class Transport {
     this.timer = 0;
     if (this.graph) {
       const now = this.ctx.currentTime;
-      this.graph.master.gain.cancelScheduledValues(now);
-      this.graph.master.gain.setValueAtTime(this.graph.master.gain.value, now);
-      this.graph.master.gain.linearRampToValueAtTime(0.0001, now + 0.05);
+      this.graph.preMaster.gain.cancelScheduledValues(now);
+      this.graph.preMaster.gain.setValueAtTime(this.graph.preMaster.gain.value, now);
+      this.graph.preMaster.gain.linearRampToValueAtTime(0.0001, now + 0.06);
       window.setTimeout(() => {
-        try { this.graph?.master.disconnect(); } catch (err) { /* already gone */ }
-      }, 120);
+        try { this.graph?.preMaster.disconnect(); } catch (err) { /* already gone */ }
+      }, 140);
     }
     this.callbacks.onStop?.();
   }
@@ -825,18 +783,23 @@ export class Transport {
   rewind() {
     if (this.playing) {
       this.stop();
-      this.play();
+      window.setTimeout(() => this.play(), 40);
     }
   }
 
   position() {
     if (!this.playing || !this.ctx) return 0;
     const state = this.getState();
-    const secPerBeat = 60 / Math.max(40, state.bpm || 110);
-    const beats = (this.ctx.currentTime - this.startTime) / secPerBeat;
-    const loop = (state.loopBars || 8) * 4;
-    if (beats < 0) return 0;
-    return beats % loop;
+    const loopBeats = (state.loopBars || 4) * 4;
+    const elapsed = (this.ctx.currentTime - this.startAt - this.latency) / this.secPerBeat;
+    if (elapsed < 0) return 0;
+    if (!state.loop) return Math.min(loopBeats, elapsed);
+    return elapsed % loopBeats;
+  }
+
+  beat() {
+    const state = this.getState();
+    return (state.loopBars || 4) * 4;
   }
 
   isPlaying() {
